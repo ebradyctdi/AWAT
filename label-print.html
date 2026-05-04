@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AWAT - Label Print</title>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #333; display: flex; min-height: 100vh; }
+  .sidebar { width: 220px; background: #1a3a5c; color: white; display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; }
+  .sidebar-brand { padding: 20px 16px 12px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+  .sidebar-brand .sub { font-size: 13px; opacity: 0.9; margin-top: 2px; font-weight: 700; letter-spacing: 0.5px; }
+  .sidebar-nav { flex: 1; padding: 12px 0; overflow-y: auto; }
+  .sidebar-nav a { display: flex; align-items: center; gap: 10px; padding: 10px 16px; color: rgba(255,255,255,0.7); text-decoration: none; font-size: 13px; transition: all 0.15s; border-left: 3px solid transparent; }
+  .sidebar-nav a:hover { background: rgba(255,255,255,0.08); color: white; }
+  .sidebar-nav a.active { background: rgba(255,255,255,0.12); color: white; border-left-color: #fd7e14; }
+  .sidebar-nav a .icon { font-size: 16px; width: 20px; text-align: center; }
+  .sidebar-nav .nav-section { font-size: 10px; text-transform: uppercase; color: rgba(255,255,255,0.3); padding: 16px 16px 6px; letter-spacing: 1px; }
+  .main-wrap { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+  .header { background: linear-gradient(135deg, #1a3a5c 0%, #2c5f8a 100%); color: white; padding: 16px 30px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header-sub { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+  .header-right { display: flex; gap: 10px; align-items: center; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .status-dot.connected { background: #28a745; }
+  .status-dot.disconnected { background: #dc3545; }
+  .status-dot.pending { background: #fd7e14; }
+  .status-label { font-size: 11px; color: rgba(255,255,255,0.8); margin-left: 4px; }
+  .container { max-width: 700px; margin: 0 auto; padding: 24px; width: 100%; }
+  .card { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+  .card h2 { font-size: 16px; color: #1a3a5c; margin-bottom: 16px; border-bottom: 2px solid #1a3a5c; padding-bottom: 8px; }
+
+  /* Label preview */
+  .label-preview-wrap { display: flex; justify-content: center; margin: 20px 0; }
+  .label-preview {
+    width: 4in; min-height: 6in; background: white; border: 1px solid #ddd;
+    padding: 0.5in 0.25in 0.1in; display: flex; flex-direction: column; align-items: center;
+    justify-content: flex-start; position: relative; overflow: visible; gap: 4px;
+  }
+  .label-preview .lbl-title { font-size: 20px; font-weight: 700; color: #000; text-transform: uppercase; letter-spacing: 2px; }
+  .label-preview .lbl-divider { width: 100%; border-top: 3px solid #000; }
+  .label-preview .lbl-po { font-size: 48px; font-weight: 900; font-family: 'Arial Black', Consolas, monospace; color: #000; letter-spacing: 0; }
+  .label-preview .lbl-fields { width: 100%; padding: 0; }
+  .label-preview .lbl-field { font-size: 18px; color: #000; padding: 6px 4px; border-bottom: 2px solid #000; display: flex; justify-content: space-between; }
+  .label-preview .lbl-field:last-child { border-bottom: none; }
+  .label-preview .lbl-field .lf-label { font-weight: 700; color: #000; }
+  .label-preview .lbl-field .lf-value { font-weight: 900; font-family: Consolas, monospace; text-align: right; max-width: 60%; color: #000; }
+  .label-preview .lbl-footer { font-size: 11px; color: #000; }
+
+  .print-btn { padding: 14px 40px; background: #28a745; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+  .print-btn:hover { background: #218838; }
+  .print-btn:disabled { background: #ccc; cursor: default; }
+
+  .empty-state { text-align: center; padding: 40px; color: #aaa; font-size: 14px; }
+
+  /* Print styles */
+  @media print {
+    body, html { margin: 0; padding: 0; width: 4in; height: 6in; }
+    body * { visibility: hidden; }
+    .label-preview, .label-preview * { visibility: visible; }
+    .label-preview {
+      position: fixed; left: 0; top: 0;
+      width: 4in; height: 6in;
+      border: none !important; margin: 0; padding: 0.4in 0.25in;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: space-between;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    .label-preview .lbl-field { padding: 12px 4px !important; }
+    .label-preview .lbl-po { font-size: 60px !important; }
+    @page {
+      size: 4in 6in;
+      margin: 0;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .sidebar { transform: translateX(-100%); transition: transform 0.3s; z-index: 300; }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 250; }
+    .sidebar-overlay.show { display: block; }
+    .main-wrap { margin-left: 0; }
+    .header { padding: 12px 16px; }
+    .header h1 { font-size: 16px; }
+    .container { padding: 16px; }
+    .hamburger { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: rgba(255,255,255,0.1); border: none; border-radius: 6px; cursor: pointer; color: white; font-size: 20px; margin-right: 12px; }
+    .label-preview { transform: scale(0.7); transform-origin: top center; }
+  }
+  @media (min-width: 769px) { .hamburger { display: none; } .sidebar-overlay { display: none !important; } }
+</style>
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-brand"><img src="https://www.ctdi.com/wp-content/uploads/2020/12/ctdi-flat-logo-white-1024x223.png" alt="CTDI" style="width:100%;margin-bottom:10px;"><div class="sub">AWAT - Alburtis, PA</div><div class="sub" id="userDisplay" style="margin-top:6px;font-size:10px;cursor:pointer;" onclick="logout()" title="Click to log out"></div></div>
+  <div class="sidebar-nav">
+    <div class="nav-section">Views</div>
+    <a href="overview.html"><span class="icon">🏠</span> Overview</a>
+    <a href="production-tracker.html"><span class="icon">📊</span> Production Tracker</a>
+    <a href="wip.html"><span class="icon">🏭</span> WIP</a>
+    <a href="material-lookup.html"><span class="icon">🔎</span> Material Lookup</a>
+    <a href="history.html"><span class="icon">📜</span> Ship History</a>
+    <div class="nav-section">Process Steps</div>
+    <a href="receive-order.html"><span class="icon">📦</span> Receive Order</a>
+    <a href="start-build.html"><span class="icon">🔨</span> Start Build</a>
+    <a href="material-info.html"><span class="icon">📋</span> Material Info Capture</a>
+    <a href="build-complete.html"><span class="icon">🏗️</span> Assembly Complete</a>
+    <a href="test-results.html"><span class="icon">✔️</span> Test Results</a>
+    <a href="qc-result.html"><span class="icon">🔍</span> QC Result</a>
+    <a href="ship-out.html"><span class="icon">🚚</span> Ship Out</a>
+    <a href="infirmary.html"><span class="icon">🏥</span> Infirmary</a>
+    <div class="nav-section">Tools</div>
+    <a href="photo-capture.html"><span class="icon">📸</span> Photo Capture</a>
+    <a href="label-print.html" class="active"><span class="icon">🏷️</span> Label Re-Print</a>
+    <a href="close-out.html"><span class="icon">📄</span> Close Out Doc</a>
+    <div class="nav-section">System</div>
+    <a href="settings.html"><span class="icon">⚙️</span> Settings</a>
+    <a href="configurations.html"><span class="icon">🗂️</span> Configurations</a>
+  </div>
+</nav>
+<div class="main-wrap">
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+  <div class="header">
+    <div><button class="hamburger" onclick="toggleSidebar()">☰</button><h1>Label Print</h1><div class="header-sub">Generate and print 4x6 PO labels for Zebra printer</div></div>
+    <div class="header-right">
+      <span id="headerUser" onclick="logout()" style="font-size:11px;color:rgba(255,255,255,0.8);cursor:pointer;padding:4px 10px;background:rgba(255,255,255,0.1);border-radius:12px;" title="Click to log out"></span>
+      <span class="status-dot disconnected" id="statusDot"></span>
+      <span class="status-label" id="statusLabel">Not connected</span>
+    </div>
+  </div>
+  <div class="container">
+    <!-- LOOKUP -->
+    <div class="card">
+      <h2>Lookup PO</h2>
+      <div style="display:flex;gap:10px;">
+        <input type="text" id="poInput" placeholder="Scan or enter PO#..." style="flex:1;padding:12px 16px;border:2px solid #ddd;border-radius:8px;font-size:18px;font-family:Consolas,monospace;" onkeydown="if(event.key==='Enter')lookupPO()" autofocus>
+        <button onclick="lookupPO()" id="lookupBtn" style="padding:12px 24px;background:#1a3a5c;color:white;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">Lookup</button>
+      </div>
+    </div>
+
+    <!-- PREVIEW + PRINT -->
+    <div id="previewCard" style="display:none;">
+      <div class="card">
+        <h2>Label Preview</h2>
+        <div class="label-preview-wrap">
+          <div class="label-preview" id="labelPreview">
+            <div style="text-align:center;"><img src="https://riedel-networks.net/hs-fs/hubfs/Website-Assets/Referenzen/CTDI_Logo.webp?width=1773&height=386&name=CTDI_Logo.webp" style="width:300px;margin:0;display:block;margin-left:auto;margin-right:auto;"><div style="font-size:18px;font-weight:900;letter-spacing:4px;margin-bottom:4px;">AWAT</div></div>
+            <div class="lbl-divider"></div>
+            <div style="font-size:12px;font-weight:700;color:#000;text-transform:uppercase;letter-spacing:1px;margin-top:4px;">PO Number</div>
+            <div class="lbl-po" id="lblPO"></div>
+            <svg id="lblBarcode"></svg>
+            <div class="lbl-divider"></div>
+            <table style="width:100%;border-collapse:collapse;">
+              <tr><td style="text-align:center;padding:6px 4px;border-bottom:1px solid #ccc;"><div style="font-size:11px;color:#888;text-transform:uppercase;">Configuration</div><div style="font-size:16px;font-weight:700;font-family:Consolas,monospace;margin-top:2px;" id="lblConfig"></div></td></tr>
+              <tr><td style="text-align:center;padding:6px 4px;border-bottom:1px solid #ccc;"><div style="font-size:11px;color:#888;text-transform:uppercase;">Location</div><div style="font-size:16px;font-weight:700;font-family:Consolas,monospace;margin-top:2px;" id="lblLocation"></div></td></tr>
+              <tr><td style="text-align:center;padding:6px 4px;"><div style="font-size:11px;color:#888;text-transform:uppercase;">Receive Date</div><div style="font-size:16px;font-weight:700;font-family:Consolas,monospace;margin-top:2px;" id="lblDate"></div></td></tr>
+            </table>
+          </div>
+        </div>
+        <div style="text-align:center;">
+          <button class="print-btn" onclick="printLabel()">🖨️ Print Label</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="toast" style="position:fixed;top:80px;right:30px;padding:14px 24px;border-radius:6px;color:white;font-size:14px;font-weight:500;box-shadow:0 4px 12px rgba(0,0,0,0.2);z-index:400;transform:translateX(120%);transition:transform 0.3s ease;"></div>
+</body>
+</html>
+
+<script>
+const URL_KEY = 'awat_script_url';
+let scriptUrl = '', _jsonpCounter = 0;
+try { scriptUrl = localStorage.getItem(URL_KEY) || 'https://script.google.com/macros/s/AKfycbzH6BlAttdknibtNWcDTCtr14g3tlUur651BtzmpK6UMRid9kabf-xSk1kbotVqeu0u/exec'; } catch(e) {}
+
+const AUTH_KEY = 'awat_auth';
+function getAuth() { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch(e) { return null; } }
+function getUser() { const a = getAuth(); return a ? a.username : ''; }
+function requireLogin() { if (!getAuth()) { window.location.href = 'login.html'; return false; } return true; }
+function logout() { if (confirm('Log out?')) { localStorage.removeItem(AUTH_KEY); localStorage.removeItem('awat_username'); window.location.href = 'login.html'; } }
+function updateUserDisplay() { const u = getUser(); const el = document.getElementById('userDisplay'); if (el) el.textContent = u ? '👤 ' + u : ''; const hdr = document.getElementById('headerUser'); if (hdr) hdr.textContent = u ? '👤 ' + u : ''; }
+if (!requireLogin()) throw new Error('redirect');
+updateUserDisplay();
+
+function jsonpRequest(url, params) {
+  return new Promise((resolve, reject) => {
+    const cb = '_jsonpCb_' + (++_jsonpCounter) + '_' + Date.now();
+    const qs = Object.entries(params||{}).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');
+    const sep = url.includes('?') ? '&' : '?';
+    const fullUrl = url + sep + 'callback=' + cb + (qs ? '&' + qs : '');
+    const timeout = setTimeout(() => { cleanup(); reject(new Error('Request timed out')); }, 15000);
+    function cleanup() { clearTimeout(timeout); delete window[cb]; if (s.parentNode) s.parentNode.removeChild(s); }
+    window[cb] = function(data) { cleanup(); resolve(data); };
+    const s = document.createElement('script');
+    s.src = fullUrl; s.onerror = function() { cleanup(); reject(new Error('Network error')); };
+    document.head.appendChild(s);
+  });
+}
+
+function setStatus(st, lb) { document.getElementById('statusDot').className = 'status-dot ' + st; document.getElementById('statusLabel').textContent = lb; }
+
+function fmtDate(str) {
+  if (!str) return '—';
+  const s = str.toString().trim(); if (!s) return '—';
+  const d = new Date(s); if (isNaN(d.getTime())) return s;
+  return (d.getMonth()+1) + '/' + d.getDate() + '/' + d.getFullYear() + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') + ':' + String(d.getSeconds()).padStart(2,'0');
+}
+
+async function lookupPO() {
+  const po = document.getElementById('poInput').value.trim();
+  if (!po) { showToast('Enter a PO number', 'error'); return; }
+  if (!scriptUrl) { setStatus('disconnected', 'No URL — go to Settings'); return; }
+
+  const btn = document.getElementById('lookupBtn');
+  btn.disabled = true; btn.textContent = 'Looking up...';
+  setStatus('pending', 'Loading...');
+
+  try {
+    const json = await jsonpRequest(scriptUrl, {});
+    setStatus('connected', 'Connected');
+    if (!json.success) throw new Error(json.error);
+
+    const order = (json.data || []).find(o => (o['PO Number']||'').toString().trim() === po);
+    if (!order) {
+      showToast('PO#' + po + ' not found', 'error');
+      document.getElementById('previewCard').style.display = 'none';
+      btn.disabled = false; btn.textContent = 'Lookup';
+      return;
+    }
+
+    // Fill label
+    document.getElementById('lblPO').textContent = po;
+    document.getElementById('lblConfig').textContent = (order['Configuration'] || '—').toString();
+    document.getElementById('lblLocation').textContent = (order['Location'] || 'ALB').toString();
+    document.getElementById('lblDate').textContent = fmtDate(order['Receive Date']);
+
+    // Generate barcode
+    try {
+      JsBarcode('#lblBarcode', po, {
+        format: 'CODE128',
+        width: 3,
+        height: 80,
+        displayValue: true,
+        fontSize: 16,
+        font: 'Consolas',
+        margin: 2
+      });
+    } catch(e) { console.error('Barcode error:', e); }
+
+    document.getElementById('previewCard').style.display = 'block';
+    document.getElementById('previewCard').scrollIntoView({ behavior: 'smooth' });
+  } catch(err) {
+    setStatus('disconnected', 'Connection failed');
+    showToast('Error: ' + err.message, 'error');
+  }
+  btn.disabled = false; btn.textContent = 'Lookup';
+  document.getElementById('poInput').focus();
+}
+
+function printLabel() {
+  const po = document.getElementById('lblPO').textContent;
+  const config = document.getElementById('lblConfig').textContent;
+  const location = document.getElementById('lblLocation').textContent;
+  const date = document.getElementById('lblDate').textContent;
+  const barcodeHtml = document.getElementById('lblBarcode').outerHTML;
+
+  const win = window.open('', '_blank', 'width=400,height=600');
+  win.document.write('<!DOCTYPE html><html><head><style>'
+    + '* { box-sizing: border-box; margin: 0; padding: 0; }'
+    + 'html, body { width: 4in; height: 6in; margin: 0; padding: 0; text-align: center; }'
+    + '@page { size: 4in 6in; margin: 0; }'
+    + '.label { width: 100%; padding: 0.5in 0.1in 0.1in; font-family: Segoe UI, Arial, sans-serif; text-align: center; margin: 0 auto; }'
+    + '.logo img { width: 300px; display: block; margin: 0 auto; }'
+    + '.awat { font-size: 20px; font-weight: 900; letter-spacing: 6px; margin: 0 0 2px; }'
+    + '.divider { border-top: 3px solid #000; margin: 4px 0; }'
+    + '.po { font-size: 48px; font-weight: 900; font-family: Arial Black, Consolas, monospace; letter-spacing: 0; padding: 4px 0 4px; text-align: center; width: 100%; }'
+    + '.bc { padding-bottom: 2px; }'
+    + '.bc svg { display: block; margin: 0 auto; }'
+    + 'table { width: 100%; border-collapse: collapse; text-align: center; }'
+    + 'td { padding: 3px 4px; }'
+    + '.hdr { font-size: 12px; color: #000; text-transform: uppercase; font-weight: 700; letter-spacing: 1px; }'
+    + '.val { font-size: 18px; font-weight: 900; font-family: Consolas, monospace; margin-top: 1px; }'
+    + '.bt { border-top: 2px solid #000; }'
+    + '</style></head><body><div class="label">'
+    + '<div class="logo"><img src="https://riedel-networks.net/hs-fs/hubfs/Website-Assets/Referenzen/CTDI_Logo.webp?width=1773&height=386&name=CTDI_Logo.webp"></div>'
+    + '<div class="awat">AWAT</div>'
+    + '<div class="divider"></div>'
+    + '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-top:4px;">PO Number</div>'
+    + '<div class="po">' + po + '</div>'
+    + '<div class="bc">' + barcodeHtml + '</div>'
+    + '<div class="divider"></div>'
+    + '<table>'
+    + '<tr><td><div class="hdr">Configuration</div><div class="val">' + config + '</div></td></tr>'
+    + '<tr><td class="bt"><div class="hdr">Location</div><div class="val">' + location + '</div></td></tr>'
+    + '<tr><td class="bt"><div class="hdr">Receive Date</div><div class="val">' + date + '</div></td></tr>'
+    + '</table>'
+    + '</div></body></html>');
+  win.document.close();
+  setTimeout(() => { win.print(); win.close(); }, 500);
+}
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast'); t.textContent = msg;
+  t.style.background = type==='success'?'#28a745':type==='error'?'#dc3545':'#fd7e14';
+  t.style.transform = 'translateX(0)';
+  setTimeout(() => { t.style.transform = 'translateX(120%)'; }, 2500);
+}
+
+function toggleSidebar() { document.querySelector('.sidebar').classList.toggle('open'); document.getElementById('sidebarOverlay').classList.toggle('show'); }
+function closeSidebar() { document.querySelector('.sidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('show'); }
+document.querySelectorAll('.sidebar-nav a').forEach(a => a.addEventListener('click', closeSidebar));
+
+// Connect check
+(async function() {
+  if (!scriptUrl) { setStatus('disconnected', 'No URL'); return; }
+  try { const j = await jsonpRequest(scriptUrl, {}); if (j.success) setStatus('connected', 'Connected'); } catch(e) { setStatus('disconnected', 'Connection failed'); }
+})();
+</script>
