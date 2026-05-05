@@ -182,9 +182,12 @@
     </div>
     <div class="modal-body" style="padding:16px 24px;">
       <div id="photoListContent"></div>
-      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #eee;">
-        <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;margin-bottom:8px;">Add New Photo</div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #eee;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;">Add New Photo</div>
+        <button onclick="autoFixNumbering()" id="autoFixBtn" style="padding:6px 14px;background:#fd7e14;color:white;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">🔢 Auto Fix Numbering</button>
+      </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="number" id="pcNewNum" placeholder="#" style="padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;width:50px;" min="1">
           <select id="pcNewStatus" style="padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;min-width:160px;">
             <option value="">Status</option>
             <option value="Received, Awaiting Start">Received, Awaiting Start</option>
@@ -206,6 +209,8 @@
   <div class="modal" style="max-width:440px;">
     <div class="modal-header"><h3>Edit Standard Photo</h3></div>
     <div class="modal-body">
+      <label class="form-label">Photo #</label>
+      <input type="number" class="form-input" id="pcEditNum" placeholder="e.g. 1, 2, 3..." min="1" style="width:100px;">
       <label class="form-label">Status (when photo should be taken)</label>
       <select class="form-input" id="pcEditStatus" style="font-family:'Segoe UI',Arial,sans-serif;">
         <option value="">— Select Status —</option>
@@ -245,7 +250,7 @@
 <script>
 const URL_KEY = 'awat_script_url';
 let scriptUrl = '', configs = [], editMode = null, editOrigName = '', deleteTarget = '', _jsonpCounter = 0;
-try { scriptUrl = localStorage.getItem(URL_KEY) || 'https://script.google.com/macros/s/AKfycbzH6BlAttdknibtNWcDTCtr14g3tlUur651BtzmpK6UMRid9kabf-xSk1kbotVqeu0u/exec'; } catch(e) {}
+try { scriptUrl = localStorage.getItem(URL_KEY) || 'https://script.google.com/macros/s/AKfycbxn-wwwsQyDEQdQmSPf1Tj2AY8d4s800sREcPDDMIk76aQeq1jHLbtT-hztfEf-p1Z5/exec'; } catch(e) {}
 
 const AUTH_KEY = 'awat_auth';
 function getAuth() { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch(e) { return null; } }
@@ -451,9 +456,14 @@ function renderPhotoList() {
     container.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;font-size:13px;">No standard photos for this configuration yet.</div>';
     return;
   }
-  // Group by status
+  // Sort by photo number, then group by status
+  const sorted = [...photos].sort((a, b) => {
+    const na = a.num ? parseInt(a.num) : 999;
+    const nb = b.num ? parseInt(b.num) : 999;
+    return na - nb;
+  });
   const groups = {};
-  photos.forEach(r => {
+  sorted.forEach(r => {
     const s = r.status || 'General';
     if (!groups[s]) groups[s] = [];
     groups[s].push(r);
@@ -464,7 +474,9 @@ function renderPhotoList() {
     html += '<div style="margin-bottom:14px;">';
     html += '<div style="font-size:11px;font-weight:700;color:' + color + ';text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid ' + color + ';">' + status + '</div>';
     groups[status].forEach(r => {
+      const numBadge = r.num ? '<span style="display:inline-block;width:24px;height:24px;background:#1a3a5c;color:white;border-radius:50%;font-size:11px;font-weight:700;text-align:center;line-height:24px;flex-shrink:0;">' + r.num + '</span>' : '<span style="display:inline-block;width:24px;height:24px;background:#e9ecef;color:#888;border-radius:50%;font-size:11px;text-align:center;line-height:24px;flex-shrink:0;">—</span>';
       html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid #f0f0f0;">'
+        + numBadge
         + '<div style="flex:1;font-size:13px;font-family:Consolas,monospace;color:#1a3a5c;font-weight:600;">' + r.photo + '</div>'
         + '<button class="btn btn-edit" onclick="openPcEditModal(' + r._row + ')">Edit</button> '
         + '<button class="btn btn-delete" onclick="openPcDelete(' + r._row + ',\'' + r.photo.replace(/'/g,"\\'") + '\')">Delete</button>'
@@ -478,23 +490,41 @@ function renderPhotoList() {
 async function addPhotoToConfig() {
   const status = document.getElementById('pcNewStatus').value;
   const photo = document.getElementById('pcNewPhoto').value.trim();
+  const photoNum = document.getElementById('pcNewNum').value.trim();
   if (!photo) { showToast('Enter a photo name', 'error'); return; }
   try {
-    const json = await jsonpRequest(scriptUrl, { action: 'addphotoconfig', config: selectedPhotoConfig, status: status, photo: photo });
+    const json = await jsonpRequest(scriptUrl, { action: 'addphotoconfig', config: selectedPhotoConfig, status: status, photo: photo, photonum: photoNum });
     if (json.success) {
       showToast('Photo added', 'success');
       document.getElementById('pcNewPhoto').value = '';
       document.getElementById('pcNewStatus').value = '';
+      document.getElementById('pcNewNum').value = '';
       await loadPhotoConfigs();
       renderPhotoList();
     } else { showToast(json.error || 'Failed', 'error'); }
   } catch(err) { showToast('Error: ' + err.message, 'error'); }
 }
 
+async function autoFixNumbering() {
+  if (!selectedPhotoConfig) return;
+  const btn = document.getElementById('autoFixBtn');
+  btn.disabled = true; btn.textContent = 'Fixing...';
+  try {
+    const json = await jsonpRequest(scriptUrl, { action: 'autofixphotonums', config: selectedPhotoConfig });
+    if (json.success) {
+      showToast('✓ Numbering fixed (' + (json.count || 0) + ' photos renumbered)', 'success');
+      await loadPhotoConfigs();
+      renderPhotoList();
+    } else { showToast(json.error || 'Failed', 'error'); }
+  } catch(err) { showToast('Error: ' + err.message, 'error'); }
+  btn.disabled = false; btn.textContent = '🔢 Auto Fix Numbering';
+}
+
 function openPcEditModal(rowNum) {
   pcEditRow = rowNum;
   const row = photoConfigRows.find(r => r._row === rowNum);
   if (!row) return;
+  document.getElementById('pcEditNum').value = row.num || '';
   document.getElementById('pcEditStatus').value = row.status;
   document.getElementById('pcEditPhoto').value = row.photo;
   document.getElementById('pcEditModal').classList.add('show');
@@ -506,11 +536,12 @@ async function saveEditPhoto() {
   if (!pcEditRow) return;
   const status = document.getElementById('pcEditStatus').value;
   const photo = document.getElementById('pcEditPhoto').value.trim();
+  const photoNum = document.getElementById('pcEditNum').value.trim();
   if (!photo) { showToast('Photo name is required', 'error'); return; }
   const btn = document.getElementById('pcEditSaveBtn');
   btn.disabled = true; btn.textContent = 'Saving...';
   try {
-    const json = await jsonpRequest(scriptUrl, { action: 'updatephotoconfig', row: pcEditRow, status: status, photo: photo });
+    const json = await jsonpRequest(scriptUrl, { action: 'updatephotoconfig', row: pcEditRow, status: status, photo: photo, photonum: photoNum });
     if (json.success) {
       showToast('Photo updated', 'success');
       closePcEditModal();

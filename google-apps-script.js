@@ -760,9 +760,10 @@ function doGet(e) {
         var cfg = (data[i][0] || '').toString().trim();
         var status = (data[i][1] || '').toString().trim();
         var photo = (data[i][2] || '').toString().trim();
+        var photoNum = (data[i][3] || '').toString().trim();
         if (cfg && photo && photo !== '-') {
           if (!configs[cfg]) configs[cfg] = [];
-          configs[cfg].push({ name: photo, status: status });
+          configs[cfg].push({ name: photo, status: status, num: photoNum });
         }
       }
       return _respond({ success: true, data: configs }, callback);
@@ -775,8 +776,9 @@ function doGet(e) {
       var cfg = (e.parameter.config || '').toString().trim();
       var status = (e.parameter.status || '').toString().trim();
       var photo = (e.parameter.photo || '').toString().trim();
+      var photoNum = (e.parameter.photonum || '').toString().trim();
       if (!cfg || !photo) return _respond({ success: false, error: 'Configuration and Photo Name are required' }, callback);
-      pcSheet.appendRow([cfg, status, photo]);
+      pcSheet.appendRow([cfg, status, photo, photoNum]);
       return _respond({ success: true }, callback);
     }
 
@@ -787,10 +789,40 @@ function doGet(e) {
       var rowNum = parseInt(e.parameter.row || '0');
       var status = (e.parameter.status || '').toString().trim();
       var photo = (e.parameter.photo || '').toString().trim();
+      var photoNum = (e.parameter.photonum || '').toString().trim();
       if (!rowNum || rowNum < 2) return _respond({ success: false, error: 'Invalid row' }, callback);
       if (!photo) return _respond({ success: false, error: 'Photo Name is required' }, callback);
+
+      // Get the configuration for this row
+      var thisConfig = pcSheet.getRange(rowNum, 1).getValue().toString().trim();
+
+      // If photo number is being set, check for conflicts and shift
+      if (photoNum && thisConfig) {
+        var newNum = parseInt(photoNum);
+        if (!isNaN(newNum)) {
+          var allData = pcSheet.getDataRange().getValues();
+          // Find all rows in same config with number >= newNum (excluding current row)
+          var rowsToShift = [];
+          for (var i = 1; i < allData.length; i++) {
+            var sheetRow = i + 1;
+            if (sheetRow === rowNum) continue; // skip the row being edited
+            var cfg = (allData[i][0] || '').toString().trim();
+            var existingNum = parseInt((allData[i][3] || '').toString().trim());
+            if (cfg === thisConfig && !isNaN(existingNum) && existingNum >= newNum) {
+              rowsToShift.push({ sheetRow: sheetRow, currentNum: existingNum });
+            }
+          }
+          // Sort descending so we update from highest to lowest (avoid conflicts during update)
+          rowsToShift.sort(function(a, b) { return b.currentNum - a.currentNum; });
+          for (var j = 0; j < rowsToShift.length; j++) {
+            pcSheet.getRange(rowsToShift[j].sheetRow, 4).setValue(rowsToShift[j].currentNum + 1);
+          }
+        }
+      }
+
       pcSheet.getRange(rowNum, 2).setValue(status);
       pcSheet.getRange(rowNum, 3).setValue(photo);
+      pcSheet.getRange(rowNum, 4).setValue(photoNum);
       return _respond({ success: true }, callback);
     }
 
@@ -802,6 +834,32 @@ function doGet(e) {
       if (!rowNum || rowNum < 2) return _respond({ success: false, error: 'Invalid row' }, callback);
       pcSheet.deleteRow(rowNum);
       return _respond({ success: true }, callback);
+    }
+
+    // ---- AUTO FIX PHOTO NUMBERING ----
+    if (action === 'autofixphotonums') {
+      var pcSheet = ss.getSheetByName('Photo Configs');
+      if (!pcSheet) return _respond({ success: false, error: 'Sheet "Photo Configs" not found' }, callback);
+      var configName = (e.parameter.config || '').toString().trim();
+      if (!configName) return _respond({ success: false, error: 'Configuration is required' }, callback);
+
+      var data = pcSheet.getDataRange().getValues();
+      // Collect rows for this config with their current numbers
+      var configRows = [];
+      for (var i = 1; i < data.length; i++) {
+        var cfg = (data[i][0] || '').toString().trim();
+        if (cfg === configName) {
+          var num = parseInt((data[i][3] || '').toString().trim());
+          configRows.push({ sheetRow: i + 1, currentNum: isNaN(num) ? 99999 : num });
+        }
+      }
+      // Sort by current number (maintain order)
+      configRows.sort(function(a, b) { return a.currentNum - b.currentNum; });
+      // Reassign sequential numbers starting from 1
+      for (var j = 0; j < configRows.length; j++) {
+        pcSheet.getRange(configRows[j].sheetRow, 4).setValue(j + 1);
+      }
+      return _respond({ success: true, count: configRows.length }, callback);
     }
 
     // ---- READ PHOTO CONFIGS RAW (with row numbers) ----
@@ -816,7 +874,8 @@ function doGet(e) {
           _row: i + 1,
           config: (data[i][0] || '').toString().trim(),
           status: (data[i][1] || '').toString().trim(),
-          photo: (data[i][2] || '').toString().trim()
+          photo: (data[i][2] || '').toString().trim(),
+          num: (data[i][3] || '').toString().trim()
         });
       }
       return _respond({ success: true, data: rows }, callback);

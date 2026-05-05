@@ -139,7 +139,7 @@
         <img id="previewImg" class="preview-img">
         <div class="preview-controls">
           <input type="text" class="label-input" id="photoLabel" placeholder="Photo name (e.g. front, serial, damage)">
-          <button onclick="savePhotoLocal()" id="saveBtn" style="padding:10px 24px;background:#28a745;color:white;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">💾 Save to PC</button>
+          <button onclick="savePhotoLocal()" id="saveBtn" style="padding:10px 24px;background:#28a745;color:white;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">💾 Save to Folder</button>
           <button onclick="cancelPreview()" style="padding:10px 16px;background:#e9ecef;color:#333;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Cancel</button>
         </div>
       </div>
@@ -195,7 +195,32 @@
     <div style="padding:16px 20px;display:flex;gap:10px;justify-content:center;align-items:center;border-top:1px solid #eee;">
       <div style="font-size:12px;color:#888;flex:1;" id="previewModalInfo"></div>
       <button onclick="replacePhoto()" style="padding:8px 20px;background:#fd7e14;color:white;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">📷 Replace Photo</button>
+      <button onclick="removePhoto()" style="padding:8px 20px;background:#dc3545;color:white;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">🗑️ Remove Photo</button>
       <button onclick="closePhotoPreview()" style="padding:8px 20px;background:#e9ecef;color:#333;border:none;border-radius:6px;font-size:13px;cursor:pointer;">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- SAVE PREVIEW POPUP -->
+<div id="savePreviewModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:295;align-items:center;justify-content:center;">
+  <div style="background:white;border-radius:12px;overflow:hidden;max-width:550px;width:95%;box-shadow:0 8px 30px rgba(0,0,0,0.3);">
+    <div style="padding:12px 20px;background:#28a745;color:white;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:14px;font-weight:600;" id="savePreviewTitle">Save Photo</span>
+      <button onclick="closeSavePreview()" style="background:none;border:none;color:white;font-size:20px;cursor:pointer;padding:0 4px;">✕</button>
+    </div>
+    <div style="padding:0;text-align:center;background:#f0f0f0;">
+      <img id="savePreviewImg" style="max-width:100%;max-height:350px;display:block;margin:0 auto;">
+    </div>
+    <div style="padding:16px 20px;border-top:1px solid #eee;">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;">
+        <label style="font-size:12px;font-weight:600;color:#666;white-space:nowrap;">Photo Name:</label>
+        <input type="text" id="savePreviewLabel" style="flex:1;padding:8px 12px;border:2px solid #ddd;border-radius:6px;font-size:14px;font-family:Consolas,monospace;" placeholder="Photo name...">
+      </div>
+      <div style="font-size:11px;color:#888;margin-bottom:12px;" id="savePreviewFileName"></div>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        <button onclick="doSaveFromPopup()" id="savePreviewBtn" style="padding:10px 28px;background:#28a745;color:white;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">💾 Save to Folder</button>
+        <button onclick="closeSavePreview()" style="padding:10px 20px;background:#e9ecef;color:#333;border:none;border-radius:6px;font-size:13px;cursor:pointer;">Cancel</button>
+      </div>
     </div>
   </div>
 </div>
@@ -230,7 +255,7 @@ let photoConfigs = {}; // { configName: [photo1, photo2, ...] }
 let existingFileNames = []; // lowercase file names in current PO folder
 let savedFiles = []; // stored file objects for preview
 
-try { scriptUrl = localStorage.getItem(URL_KEY) || 'https://script.google.com/macros/s/AKfycbzH6BlAttdknibtNWcDTCtr14g3tlUur651BtzmpK6UMRid9kabf-xSk1kbotVqeu0u/exec'; } catch(e) {}
+try { scriptUrl = localStorage.getItem(URL_KEY) || 'https://script.google.com/macros/s/AKfycbxn-wwwsQyDEQdQmSPf1Tj2AY8d4s800sREcPDDMIk76aQeq1jHLbtT-hztfEf-p1Z5/exec'; } catch(e) {}
 
 const AUTH_KEY = 'awat_auth';
 function getAuth() { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch(e) { return null; } }
@@ -443,16 +468,8 @@ function retakePhoto() {
 
 function useCamPhoto() {
   imageData = document.getElementById('camPreviewImg').src;
-  document.getElementById('previewImg').src = imageData;
-  document.getElementById('previewArea').style.display = 'block';
-  if (pendingStdPhotoName) {
-    document.getElementById('photoLabel').value = pendingStdPhotoName;
-  } else {
-    document.getElementById('photoLabel').value = '';
-  }
-  document.getElementById('photoLabel').focus();
   closeCamera();
-  document.getElementById('captureCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  showSavePreview();
 }
 
 function closeCamera() {
@@ -645,6 +662,22 @@ function replacePhoto() {
   document.getElementById('captureMethodModal').style.display = 'flex';
 }
 
+async function removePhoto() {
+  if (previewFileIdx < 0) return;
+  const f = savedFiles[previewFileIdx];
+  if (!f) return;
+  if (!confirm('Delete "' + f.name + '"?\n\nThis cannot be undone.')) return;
+  try {
+    const poFolder = await rootDirHandle.getDirectoryHandle(selectedPO, { create: false });
+    await poFolder.removeEntry(f.name);
+    showToast('✓ Deleted: ' + f.name, 'success');
+    closePhotoPreview();
+    loadExistingPhotos();
+  } catch(err) {
+    showToast('Error deleting: ' + err.message, 'error');
+  }
+}
+
 function renderStdPhotos() {
   const card = document.getElementById('stdPhotosCard');
   const listEl = document.getElementById('stdPhotosList');
@@ -706,6 +739,31 @@ function renderStdPhotos() {
     html += '</div></div>';
   });
   document.getElementById('stdProgress').textContent = '(' + done + '/' + stdPhotos.length + ')';
+
+  // Find extra photos (in folder but not matching any standard photo)
+  const stdExpectedFiles = new Set();
+  stdPhotos.forEach(p => {
+    const statusPart = p.status ? p.status + ' - ' : '';
+    stdExpectedFiles.add((selectedPO + ' - ' + statusPart + p.name + '.jpg').toLowerCase());
+  });
+  const extraFiles = savedFiles.filter(f => !stdExpectedFiles.has(f.name.toLowerCase()));
+
+  if (extraFiles.length) {
+    html += '<div style="margin-top:16px;">';
+    html += '<div style="font-size:12px;font-weight:700;color:#6c757d;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #6c757d;">Extra Photos (' + extraFiles.length + ')</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:8px;">';
+    extraFiles.forEach(f => {
+      const idx = savedFiles.indexOf(f);
+      html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;">'
+        + '<span style="font-size:18px;">📎</span>'
+        + '<div style="flex:1;"><div onclick="openPhotoPreview(' + idx + ')" style="cursor:pointer;text-decoration:underline;font-size:13px;font-weight:600;color:#1a3a5c;">' + f.name + '</div>'
+        + '<div style="font-size:10px;color:#888;">' + Math.round(f.size / 1024) + ' KB</div></div>'
+        + '<span style="color:#6c757d;font-weight:600;font-size:11px;">Extra</span>'
+        + '</div>';
+    });
+    html += '</div></div>';
+  }
+
   listEl.innerHTML = html;
 }
 
@@ -749,10 +807,7 @@ async function stdCaptureFile(event) {
   if (!blob) return;
   fileToImageData(blob, function(data) {
     imageData = data;
-    document.getElementById('photoLabel').value = pendingStdPhotoName;
-    document.getElementById('previewImg').src = imageData;
-    document.getElementById('previewArea').style.display = 'block';
-    document.getElementById('captureCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    showSavePreview();
   });
 }
 
@@ -798,16 +853,79 @@ async function onFileSelected(event) {
   if (!blob) return;
   fileToImageData(blob, function(data) {
     imageData = data;
-    document.getElementById('previewImg').src = imageData;
-    document.getElementById('previewArea').style.display = 'block';
-    document.getElementById('photoLabel').value = '';
-    document.getElementById('photoLabel').focus();
+    showSavePreview();
   });
 }
 
 function cancelPreview() {
   imageData = '';
   document.getElementById('previewArea').style.display = 'none';
+}
+
+// ---- SAVE PREVIEW POPUP ----
+function showSavePreview() {
+  document.getElementById('savePreviewImg').src = imageData;
+  const label = pendingStdPhotoName || '';
+  document.getElementById('savePreviewLabel').value = label;
+  const statusPart = pendingStdPhotoStatus ? pendingStdPhotoStatus + ' - ' : '';
+  const fileName = selectedPO + ' - ' + statusPart + (label || '[name]') + '.jpg';
+  document.getElementById('savePreviewFileName').textContent = 'Will save as: ' + fileName;
+  document.getElementById('savePreviewTitle').textContent = label ? 'Save: ' + label : 'Save Photo';
+  document.getElementById('savePreviewModal').style.display = 'flex';
+  if (!label) document.getElementById('savePreviewLabel').focus();
+}
+
+function closeSavePreview() {
+  document.getElementById('savePreviewModal').style.display = 'none';
+  imageData = '';
+}
+
+// Update filename preview as user types
+document.getElementById('savePreviewLabel').addEventListener('input', function() {
+  const label = this.value.trim() || '[name]';
+  const statusPart = pendingStdPhotoStatus ? pendingStdPhotoStatus + ' - ' : '';
+  document.getElementById('savePreviewFileName').textContent = 'Will save as: ' + selectedPO + ' - ' + statusPart + label + '.jpg';
+});
+
+async function doSaveFromPopup() {
+  if (!selectedPO) { showToast('Select a PO first', 'error'); return; }
+  if (!imageData) { showToast('No photo to save', 'error'); return; }
+  if (!rootDirHandle) { showToast('Choose a save folder first', 'error'); return; }
+
+  const label = document.getElementById('savePreviewLabel').value.trim() || 'photo';
+  const statusPart = pendingStdPhotoStatus ? pendingStdPhotoStatus + ' - ' : '';
+  const fileName = selectedPO + ' - ' + statusPart + label + '.jpg';
+
+  const btn = document.getElementById('savePreviewBtn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+
+  try {
+    const poFolder = await rootDirHandle.getDirectoryHandle(selectedPO, { create: true });
+    const resp = await fetch(imageData);
+    const blob = await resp.blob();
+    const fileHandle = await poFolder.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+
+    showToast('✓ Saved: ' + fileName, 'success');
+    document.getElementById('savePreviewModal').style.display = 'none';
+    imageData = '';
+    pendingStdPhotoName = '';
+    pendingStdPhotoStatus = '';
+    loadExistingPhotos();
+  } catch(err) {
+    if (err.name === 'NotAllowedError') {
+      showToast('Permission denied — click "Choose Folder" again', 'error');
+      rootDirHandle = null;
+      document.getElementById('folderPathInput').value = '';
+      document.getElementById('folderHint').textContent = 'Pick a root folder. PO subfolders are created automatically.';
+      document.getElementById('folderHint').style.color = '#888';
+    } else {
+      showToast('Save failed: ' + err.message, 'error');
+    }
+  }
+  btn.disabled = false; btn.textContent = '💾 Save to PC';
 }
 
 function showToast(msg, type) {

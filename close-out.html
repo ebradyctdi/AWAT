@@ -103,10 +103,32 @@
       </div>
     </div>
 
+    <!-- PHOTO FOLDER -->
+    <div class="card" id="folderCard">
+      <h2>Photo Folder</h2>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="text" class="field-input" id="folderPathInput" readonly placeholder="No folder selected" style="flex:1;background:#f8f9fa;">
+        <button onclick="pickFolder()" style="padding:10px 20px;background:#1a3a5c;color:white;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">Choose Folder</button>
+      </div>
+      <div style="font-size:11px;color:#888;margin-top:6px;" id="folderHint">Select the root photos folder to check photo completion.</div>
+    </div>
+
     <!-- COVER PAGE DATA -->
     <div class="card" id="dataCard" style="display:none;">
       <h2>2. Cover Page Details</h2>
       <div class="info-bar" id="poInfo"></div>
+
+      <!-- STATUS & PHOTO READINESS -->
+      <div id="readinessSection" style="display:flex;gap:12px;margin-bottom:16px;">
+        <div style="flex:1;padding:12px 16px;background:#f8f9fa;border-radius:8px;border-left:4px solid #17a2b8;">
+          <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px;">Process Status</div>
+          <div style="font-size:16px;font-weight:700;color:#1a3a5c;margin-top:4px;" id="poStatus">—</div>
+        </div>
+        <div style="flex:1;padding:12px 16px;background:#f8f9fa;border-radius:8px;border-left:4px solid #28a745;">
+          <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px;">Photos Saved</div>
+          <div style="font-size:16px;font-weight:700;margin-top:4px;" id="photoReadiness">—</div>
+        </div>
+      </div>
 
       <div class="field-row">
         <div><label class="field-label">Pallet/Project ID (PO#)</label><input type="text" class="field-input" id="fPO" readonly></div>
@@ -131,8 +153,8 @@
 
 <script>
 const URL_KEY = 'awat_script_url';
-let scriptUrl = '', poData = null, poMaterials = [], _jsonpCounter = 0;
-try { scriptUrl = localStorage.getItem(URL_KEY) || 'https://script.google.com/macros/s/AKfycbzH6BlAttdknibtNWcDTCtr14g3tlUur651BtzmpK6UMRid9kabf-xSk1kbotVqeu0u/exec'; } catch(e) {}
+let scriptUrl = '', poData = null, poMaterials = [], photoConfigs = {}, rootDirHandle = null, _jsonpCounter = 0;
+try { scriptUrl = localStorage.getItem(URL_KEY) || 'https://script.google.com/macros/s/AKfycbxn-wwwsQyDEQdQmSPf1Tj2AY8d4s800sREcPDDMIk76aQeq1jHLbtT-hztfEf-p1Z5/exec'; } catch(e) {}
 
 const AUTH_KEY = 'awat_auth';
 function getAuth() { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch(e) { return null; } }
@@ -168,6 +190,114 @@ function fmtDate(str) {
   return d.getDate() + months[d.getMonth()] + String(d.getFullYear()).slice(2);
 }
 
+// ---- FOLDER PICKER (with persistence) ----
+function openIDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('awat_closeout', 1);
+    req.onupgradeneeded = (e) => { const db = e.target.result; if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles'); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveFolderHandle(handle) {
+  const db = await openIDB();
+  const tx = db.transaction('handles', 'readwrite');
+  tx.objectStore('handles').put(handle, 'rootDir');
+  return new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = reject; });
+}
+
+async function loadFolderHandle() {
+  const db = await openIDB();
+  const tx = db.transaction('handles', 'readonly');
+  const req = tx.objectStore('handles').get('rootDir');
+  return new Promise((resolve) => { req.onsuccess = () => resolve(req.result || null); req.onerror = () => resolve(null); });
+}
+
+async function restoreSavedFolder() {
+  try {
+    const handle = await loadFolderHandle();
+    if (!handle) return;
+    const perm = await handle.queryPermission({ mode: 'readwrite' });
+    if (perm === 'granted') {
+      rootDirHandle = handle;
+      document.getElementById('folderPathInput').value = handle.name;
+      document.getElementById('folderHint').textContent = '✓ Folder restored: ' + handle.name;
+      document.getElementById('folderHint').style.color = '#28a745';
+    } else {
+      document.getElementById('folderPathInput').value = handle.name + ' (reconnect needed)';
+      document.getElementById('folderHint').innerHTML = '<a href="#" onclick="reGrantFolder(event)" style="color:#1a3a5c;font-weight:600;">Click to reconnect</a>';
+      document.getElementById('folderHint').style.color = '#fd7e14';
+      window._pendingHandle = handle;
+    }
+  } catch(e) {}
+}
+
+async function reGrantFolder(e) {
+  e.preventDefault();
+  if (!window._pendingHandle) return;
+  try {
+    const perm = await window._pendingHandle.requestPermission({ mode: 'readwrite' });
+    if (perm === 'granted') {
+      rootDirHandle = window._pendingHandle;
+      document.getElementById('folderPathInput').value = rootDirHandle.name;
+      document.getElementById('folderHint').textContent = '✓ Folder reconnected';
+      document.getElementById('folderHint').style.color = '#28a745';
+      if (poData) checkPhotoReadiness();
+    }
+  } catch(err) { showToast('Permission denied', 'error'); }
+}
+
+async function pickFolder() {
+  try {
+    rootDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    document.getElementById('folderPathInput').value = rootDirHandle.name;
+    document.getElementById('folderHint').textContent = '✓ Folder set: ' + rootDirHandle.name;
+    document.getElementById('folderHint').style.color = '#28a745';
+    await saveFolderHandle(rootDirHandle);
+    if (poData) checkPhotoReadiness();
+  } catch(err) {
+    if (err.name !== 'AbortError') showToast('Could not set folder: ' + err.message, 'error');
+  }
+}
+
+restoreSavedFolder();
+
+async function checkPhotoReadiness() {
+  const el = document.getElementById('photoReadiness');
+  if (!rootDirHandle || !poData) { el.textContent = 'Select folder to check'; el.style.color = '#888'; return; }
+
+  const po = (poData['PO Number'] || '').toString().trim();
+  const config = (poData['Configuration'] || '').toString().trim();
+  const stdPhotos = photoConfigs[config] || [];
+
+  if (!stdPhotos.length) { el.textContent = 'No photo config for this configuration'; el.style.color = '#888'; return; }
+
+  // Check local folder for existing photos
+  let savedCount = 0;
+  try {
+    const poFolder = await rootDirHandle.getDirectoryHandle(po, { create: false });
+    const existingFiles = [];
+    for await (const [name] of poFolder.entries()) {
+      existingFiles.push(name.toLowerCase());
+    }
+    // Check each standard photo
+    stdPhotos.forEach(p => {
+      const statusPart = p.status ? p.status + ' - ' : '';
+      const expectedFile = (po + ' - ' + statusPart + p.name + '.jpg').toLowerCase();
+      if (existingFiles.includes(expectedFile)) savedCount++;
+    });
+  } catch(e) {
+    // Folder doesn't exist
+  }
+
+  const total = stdPhotos.length;
+  el.textContent = savedCount + ' / ' + total;
+  if (savedCount === total) { el.style.color = '#28a745'; }
+  else if (savedCount > 0) { el.style.color = '#fd7e14'; }
+  else { el.style.color = '#dc3545'; }
+}
+
 // ---- PO LOOKUP ----
 async function lookupPO() {
   const po = document.getElementById('poInput').value.trim();
@@ -179,9 +309,10 @@ async function lookupPO() {
   setStatus('pending', 'Loading...');
 
   try {
-    const [ordersJson, matJson] = await Promise.all([
+    const [ordersJson, matJson, pcJson] = await Promise.all([
       jsonpRequest(scriptUrl, {}),
-      jsonpRequest(scriptUrl, { action: 'materialread', po: po })
+      jsonpRequest(scriptUrl, { action: 'materialread', po: po }),
+      jsonpRequest(scriptUrl, { action: 'readphotoconfigs' }).catch(() => ({ success: false }))
     ]);
     setStatus('connected', 'Connected');
 
@@ -191,6 +322,7 @@ async function lookupPO() {
 
     poData = order;
     poMaterials = (matJson.success ? matJson.data : []) || [];
+    if (pcJson.success && pcJson.data) photoConfigs = pcJson.data;
 
     // Fill form
     document.getElementById('fPO').value = po;
@@ -211,7 +343,15 @@ async function lookupPO() {
     document.getElementById('fCabinetSerial').value = cabinetSN;
     document.getElementById('fCabinetID').value = '';
 
-    document.getElementById('poInfo').innerHTML = '<strong>PO#' + po + '</strong> — ' + (order['Configuration'] || 'No config') + ' — <strong>' + (order['Status'] || '') + '</strong>';
+    document.getElementById('poInfo').innerHTML = '<strong>PO#' + po + '</strong> — ' + (order['Configuration'] || 'No config');
+
+    // Display process status
+    const status = (order['Status'] || '—').toString();
+    document.getElementById('poStatus').textContent = status;
+
+    // Check photo readiness
+    checkPhotoReadiness();
+
     document.getElementById('dataCard').style.display = 'block';
     document.getElementById('dataCard').scrollIntoView({ behavior: 'smooth' });
   } catch(err) {
@@ -330,35 +470,144 @@ async function generateDoc() {
       })],
     });
 
-    // Create document with header
-    const doc = new Document({
-      sections: [{
-        properties: {
-          page: {
-            margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 },
-          },
-        },
-        headers: {
-          default: new Header({
-            children: [headerTable],
-          }),
-        },
-        footers: {
-          default: new Footer({
-            children: [new Paragraph({
-              alignment: AlignmentType.CENTER,
-              children: [
-                new TextRun({ text: 'Page ', size: 18, font: 'Calibri' }),
-                new TextRun({ children: [PageNumber.CURRENT], bold: true, size: 18, font: 'Calibri' }),
-                new TextRun({ text: ' of ', size: 18, font: 'Calibri' }),
-                new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 18, font: 'Calibri' }),
-              ],
-            })],
-          }),
-        },
-        children: coverChildren,
-      }],
+    // ---- LOAD PHOTOS FROM LOCAL FOLDER ----
+    const photoPages = [];
+    if (rootDirHandle) {
+      try {
+        const poFolder = await rootDirHandle.getDirectoryHandle(po, { create: false });
+        const config = (poData['Configuration'] || '').toString().trim();
+        const stdPhotos = photoConfigs[config] || [];
+
+        // Get all image files in the PO folder
+        const fileMap = {}; // lowercase name -> file handle
+        for await (const [name, handle] of poFolder.entries()) {
+          if (handle.kind === 'file' && /\.(jpg|jpeg|png|gif|webp)$/i.test(name)) {
+            fileMap[name.toLowerCase()] = handle;
+          }
+        }
+
+        // Order photos by standard config order (sorted by photo number), then remaining files
+        const orderedPhotos = [];
+        const usedFiles = new Set();
+
+        // Sort standard photos by their number
+        const sortedStdPhotos = [...stdPhotos].sort((a, b) => {
+          const na = a.num ? parseInt(a.num) : 999;
+          const nb = b.num ? parseInt(b.num) : 999;
+          return na - nb;
+        });
+
+        // Match standard photos in number order
+        for (const p of sortedStdPhotos) {
+          const statusPart = p.status ? p.status + ' - ' : '';
+          const expectedFile = (po + ' - ' + statusPart + p.name + '.jpg').toLowerCase();
+          if (fileMap[expectedFile]) {
+            orderedPhotos.push({ title: p.name, status: p.status || '', num: p.num || '', handle: fileMap[expectedFile] });
+            usedFiles.add(expectedFile);
+          }
+        }
+
+        // Add any remaining photos not in the standard list
+        for (const [name, handle] of Object.entries(fileMap)) {
+          if (!usedFiles.has(name)) {
+            // Extract title from filename: "[PO] - [Status] - [Name].jpg" or "[PO] - [Name].jpg"
+            let title = name.replace(/\.[^.]+$/, '');
+            const prefix = po.toLowerCase() + ' - ';
+            if (title.startsWith(prefix)) title = title.substring(prefix.length);
+            orderedPhotos.push({ title: title, status: '', handle: handle });
+          }
+        }
+
+        // Read each photo file and create page data
+        for (const photo of orderedPhotos) {
+          const file = await photo.handle.getFile();
+          const arrayBuffer = await file.arrayBuffer();
+          // Get actual image dimensions
+          const blob = new Blob([arrayBuffer], { type: file.type });
+          const bmpUrl = URL.createObjectURL(blob);
+          const dims = await new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => { resolve({ w: img.naturalWidth, h: img.naturalHeight }); URL.revokeObjectURL(bmpUrl); };
+            img.onerror = () => { resolve({ w: 500, h: 375 }); URL.revokeObjectURL(bmpUrl); };
+            img.src = bmpUrl;
+          });
+          photoPages.push({ title: photo.title, status: photo.status, data: arrayBuffer, type: file.type, width: dims.w, height: dims.h });
+        }
+      } catch(e) {
+        // PO folder doesn't exist — no photos to add
+        console.warn('No photo folder found for PO:', e.message);
+      }
+    }
+
+    // ---- BUILD SECTIONS ----
+    const sections = [];
+
+    // Section 1: Cover page
+    const headerDef = {
+      default: new Header({ children: [headerTable] }),
+    };
+    const footerDef = {
+      default: new Footer({
+        children: [new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [
+            new TextRun({ text: 'Page ', size: 18, font: 'Calibri' }),
+            new TextRun({ children: [PageNumber.CURRENT], bold: true, size: 18, font: 'Calibri' }),
+            new TextRun({ text: ' of ', size: 18, font: 'Calibri' }),
+            new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 18, font: 'Calibri' }),
+          ],
+        })],
+      }),
+    };
+    const pageProps = {
+      page: { margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } },
+    };
+
+    sections.push({
+      properties: pageProps,
+      headers: headerDef,
+      footers: footerDef,
+      children: coverChildren,
     });
+
+    // Photo pages — each photo gets its own page
+    for (const photo of photoPages) {
+      const photoTitle = photo.status ? photo.status + ' — ' + photo.title : photo.title;
+      const isJpeg = photo.type.includes('jpeg') || photo.type.includes('jpg');
+      const imgType = isJpeg ? 'jpg' : 'png';
+
+      // Scale to fit page width (6in usable = ~576px) while maintaining aspect ratio
+      const maxW = 576;
+      const maxH = 700;
+      let w = photo.width, h = photo.height;
+      if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+      if (h > maxH) { w = Math.round(w * maxH / h); h = maxH; }
+
+      sections.push({
+        properties: pageProps,
+        headers: headerDef,
+        footers: footerDef,
+        children: [
+          new Paragraph({
+            children: [new TextRun({ text: photoTitle, size: 26, font: 'Calibri', bold: true })],
+            spacing: { after: 200 },
+          }),
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [
+              new docx.ImageRun({
+                data: photo.data,
+                transformation: { width: w, height: h },
+                type: imgType,
+              }),
+            ],
+          }),
+        ],
+      });
+    }
+
+    // Create document
+    const doc = new Document({ sections });
 
     // Generate and download
     const buffer = await Packer.toBlob(doc);
