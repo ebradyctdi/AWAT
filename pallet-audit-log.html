@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FWA - Pallet Audit Tool Log</title>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #333; display: flex; min-height: 100vh; }
+  .sidebar { width: 220px; background: #1a3a5c; color: white; display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; }
+  .sidebar-brand { padding: 20px 16px 12px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+  .sidebar-brand .sub { font-size: 13px; opacity: 0.9; margin-top: 2px; font-weight: 700; letter-spacing: 0.5px; }
+  .sidebar-nav { flex: 1; padding: 12px 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.3) transparent; }
+  .sidebar-nav::-webkit-scrollbar { width: 6px; }
+  .sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+  .sidebar-nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 3px; }
+  .sidebar-nav::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.5); }
+  .sidebar-nav a { display: flex; align-items: center; gap: 10px; padding: 10px 16px; color: rgba(255,255,255,0.7); text-decoration: none; font-size: 13px; transition: all 0.15s; border-left: 3px solid transparent; }
+  .sidebar-nav a:hover { background: rgba(255,255,255,0.08); color: white; }
+  .sidebar-nav a.active { background: rgba(255,255,255,0.12); color: white; border-left-color: #1a3a5c; }
+  .sidebar-nav a .icon { font-size: 16px; width: 20px; text-align: center; }
+  .sidebar-nav .nav-section { font-size: 12px; text-transform: uppercase; color: rgba(255,255,255,0.85); padding: 16px 16px 8px; letter-spacing: 1px; cursor: pointer; user-select: none; font-weight: 600; }
+  .sidebar-nav .nav-section:hover { color: white; background: rgba(255,255,255,0.05); }
+  .sidebar-nav .nav-group { display: none; }
+  .sidebar-nav .nav-group.open { display: block; }
+  .main-wrap { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+  .header { background: linear-gradient(135deg, #1a3a5c 0%, #2c5f8a 100%); color: white; padding: 20px 30px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+  .header h1 { font-size: 22px; font-weight: 600; }
+  .header-sub { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+  .header-right { display: flex; gap: 10px; align-items: center; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .status-dot.connected { background: #28a745; }
+  .status-dot.disconnected { background: #dc3545; }
+  .status-dot.pending { background: #fd7e14; }
+  .status-label { font-size: 11px; color: rgba(255,255,255,0.8); margin-left: 4px; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; width: 100%; }
+</style>
+<style>
+  .table-section { background: white; border-radius: 10px; padding: 20px 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .table-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .table-header h2 { font-size: 16px; color: #1a3a5c; }
+  .audit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .audit-table th { background: #1a3a5c; color: white; padding: 10px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+  .audit-table td { padding: 10px 12px; border-bottom: 1px solid #eee; }
+  .audit-table tr:hover { background: #f8f9fa; }
+  .audit-table .result-pass { background: #d4edda; color: #155724; font-weight: 700; padding: 3px 10px; border-radius: 10px; font-size: 11px; display: inline-block; }
+  .audit-table .result-fail { background: #f8d7da; color: #721c24; font-weight: 700; padding: 3px 10px; border-radius: 10px; font-size: 11px; display: inline-block; }
+  .mono { font-family: Consolas, monospace; }
+  .btn { padding: 8px 18px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  .btn-primary { background: #1a3a5c; color: white; }
+  .btn-primary:hover { background: #2c5f8a; }
+  .empty-state { text-align: center; padding: 40px; color: #aaa; font-size: 14px; }
+  /* Modal */
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 300; align-items: center; justify-content: center; }
+  .modal-overlay.show { display: flex; }
+  .modal { background: white; border-radius: 12px; max-width: 600px; width: 90%; box-shadow: 0 8px 30px rgba(0,0,0,0.25); overflow: hidden; max-height: 80vh; display: flex; flex-direction: column; }
+  .modal-header { padding: 16px 24px; color: white; background: #1a3a5c; }
+  .modal-header h3 { font-size: 16px; }
+  .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+  .modal-footer { padding: 12px 24px; border-top: 1px solid #eee; text-align: right; }
+  .modal-footer button { padding: 8px 24px; background: #e9ecef; color: #333; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+  .detail-row:last-child { border-bottom: none; }
+  .detail-label { color: #666; }
+  .detail-value { font-weight: 600; font-family: Consolas, monospace; }
+  .imei-list { margin-top: 12px; }
+  .imei-list-title { font-size: 12px; font-weight: 600; color: #1a3a5c; text-transform: uppercase; margin-bottom: 8px; }
+  .imei-chip { display: inline-block; background: #e9ecef; padding: 4px 10px; border-radius: 4px; font-family: Consolas, monospace; font-size: 12px; margin: 2px 4px 2px 0; }
+</style>
+<style>
+  @media (max-width: 768px) {
+    .sidebar { transform: translateX(-100%); transition: transform 0.3s; z-index: 300; }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 250; }
+    .sidebar-overlay.show { display: block; }
+    .main-wrap { margin-left: 0; }
+    .header { padding: 12px 16px; }
+    .header h1 { font-size: 16px; }
+    .container { padding: 16px; }
+    .hamburger { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: rgba(255,255,255,0.1); border: none; border-radius: 6px; cursor: pointer; color: white; font-size: 20px; margin-right: 12px; }
+    .audit-table { font-size: 11px; }
+    .audit-table th, .audit-table td { padding: 6px 8px; }
+  }
+  @media (min-width: 769px) { .hamburger { display: none; } .sidebar-overlay { display: none !important; } }
+</style>
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-brand"><img src="https://www.ctdi.com/wp-content/uploads/2020/12/ctdi-flat-logo-white-1024x223.png" alt="CTDI" style="width:100%;margin-bottom:10px;"><div class="sub">FWA</div></div>
+  <div class="sidebar-nav">
+    <div class="nav-section" onclick="toggleNavGroup(this)">▶ Tester Health</div>
+    <div class="nav-group">
+    <a href="index.html"><span class="icon">🏠</span> Overview</a>
+    <a href="report-issue.html"><span class="icon">🚨</span> Report An Issue</a>
+    <a href="open-issues.html"><span class="icon">⚠️</span> Open Issues</a>
+    <a href="issue-history.html"><span class="icon">📋</span> Issue History</a>
+    </div>
+    <div class="nav-section" onclick="toggleNavGroup(this)">▶ Product/Device Issues</div>
+    <div class="nav-group">
+    <a href="receipt-issues.html"><span class="icon">🔍</span> Issue Logger</a>
+    <a href="receipt-history.html"><span class="icon">📜</span> Issue History</a>
+    <a href="receipt-carts.html"><span class="icon">🛒</span> Carts</a>
+    <a href="cart-label.html"><span class="icon">🏷️</span> Cart Label Maker</a>
+    <a href="wip-status.html"><span class="icon">📊</span> WIP Status by Carts</a>
+    </div>
+    <div class="nav-section" onclick="toggleNavGroup(this)">▶ Audit Tools</div>
+    <div class="nav-group">
+    <a href="pallet-audit.html"><span class="icon">📦</span> Pallet Audit Tool</a>
+    <a href="pallet-issues.html"><span class="icon">⚠️</span> Open Pallet Issues</a>
+    <a href="pallet-audit-log.html" class="active"><span class="icon">📜</span> Audit Log</a>
+    </div>
+    <div class="nav-section" onclick="toggleNavGroup(this)">▶ WNC Repair Tools</div>
+    <div class="nav-group">
+    <a href="repaired-pallet-build.html"><span class="icon">🔧</span> Repaired Pallet Build</a>
+    <a href="repair-pallet-label.html"><span class="icon">🏷️</span> Repair Pallet Label Re-Print</a>
+    </div>
+    <div class="nav-section" onclick="toggleNavGroup(this)">▶ System</div>
+    <div class="nav-group">
+    <a href="testers.html"><span class="icon">🖥️</span> Testers</a>
+    <a href="email-schedule.html"><span class="icon">📧</span> Email Schedule</a>
+    <a href="settings.html"><span class="icon">⚙️</span> Settings</a>
+    </div>
+  </div>
+</nav>
+<div class="main-wrap">
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+  <div class="header">
+    <div><button class="hamburger" onclick="toggleSidebar()">☰</button><h1>Pallet Audit Tool Log</h1><div class="header-sub">CTDI — FWA Audit Tools</div></div>
+    <div class="header-right">
+      <span class="status-dot disconnected" id="statusDot"></span>
+      <span class="status-label" id="statusLabel">Not connected</span>
+    </div>
+  </div>
+  <div class="container">
+    <div class="table-section">
+      <div class="table-header">
+        <h2>Audit History</h2>
+        <button class="btn btn-primary" onclick="loadData()">↻ Refresh</button>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label style="font-size:11px;font-weight:600;color:#666;">From:</label>
+          <input type="date" id="filterFrom" onchange="renderTable()" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label style="font-size:11px;font-weight:600;color:#666;">To:</label>
+          <input type="date" id="filterTo" onchange="renderTable()" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label style="font-size:11px;font-weight:600;color:#666;">Result:</label>
+          <select id="filterResult" onchange="renderTable()" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+            <option value="">All</option>
+            <option value="PASS">PASS</option>
+            <option value="FAIL">FAIL</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" style="padding:6px 14px;font-size:11px;" onclick="clearFilters()">Clear Filters</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="audit-table">
+          <thead>
+            <tr>
+              <th>Pallet ID</th>
+              <th>Part Number</th>
+              <th>Timestamp</th>
+              <th>IMEIs on Pallet</th>
+              <th>IMEIs Validated</th>
+              <th>Result</th>
+              <th>Issues</th>
+              <th>Auditor</th>
+              <th>Notes</th>
+              <th></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="auditTableBody">
+            <tr><td colspan="11" class="empty-state">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Detail Modal -->
+<div class="modal-overlay" id="detailModal" onclick="if(event.target===this)closeDetail()">
+  <div class="modal">
+    <div class="modal-header"><h3 id="detailTitle">Audit Details</h3></div>
+    <div class="modal-body" id="detailBody"></div>
+    <div class="modal-footer"><button onclick="exportAuditCSV()" style="padding:8px 18px;background:#28a745;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;margin-right:8px;">📥 Export CSV</button><button onclick="closeDetail()">Close</button></div>
+  </div>
+</div>
+
+<div id="toast" style="position:fixed;top:80px;right:30px;padding:14px 24px;border-radius:6px;color:white;font-size:14px;font-weight:500;box-shadow:0 4px 12px rgba(0,0,0,0.2);z-index:400;transform:translateX(120%);transition:transform 0.3s ease;"></div>
+<script>
+const URL_KEY = 'fwa_script_url';
+let scriptUrl = '';
+try { scriptUrl = localStorage.getItem(URL_KEY) || 'https://script.google.com/macros/s/AKfycbzFHRPEVVUJpDMg8-KdRL6T83uGN09LIQODQo2oNPalXVUOwSFezXiTAEP6D5-IfFOQxA/exec'; } catch(e) {}
+
+let allAudits = [];
+let allIssues = [];
+let currentDetailIdx = -1;
+let _jsonpCounter = 0;
+
+function jsonpRequest(url, params) {
+  return new Promise((resolve, reject) => {
+    const cb = '_jsonpCb_' + (++_jsonpCounter) + '_' + Date.now();
+    const qs = Object.entries(params||{}).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');
+    const sep = url.includes('?') ? '&' : '?';
+    const fullUrl = url + sep + 'callback=' + cb + (qs ? '&' + qs : '');
+    const timeout = setTimeout(() => { cleanup(); reject(new Error('Timed out')); }, 15000);
+    function cleanup() { clearTimeout(timeout); delete window[cb]; if (s.parentNode) s.parentNode.removeChild(s); }
+    window[cb] = function(data) { cleanup(); resolve(data); };
+    const s = document.createElement('script');
+    s.src = fullUrl; s.onerror = function() { cleanup(); reject(new Error('Network error')); };
+    document.head.appendChild(s);
+  });
+}
+
+function setStatus(state, label) {
+  document.getElementById('statusDot').className = 'status-dot ' + state;
+  document.getElementById('statusLabel').textContent = label;
+}
+
+function fmtDate(str) {
+  if (!str) return '—';
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return str;
+  return d.toLocaleString('en-US', { timeZone: 'America/New_York', month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+}
+async function loadData() {
+  if (!scriptUrl) { setStatus('disconnected', 'No URL — go to Settings'); return; }
+  setStatus('pending', 'Loading...');
+  try {
+    const [auditsJson, issuesJson] = await Promise.all([
+      jsonpRequest(scriptUrl, { action: 'readpalletaudits' }),
+      jsonpRequest(scriptUrl, { action: 'readpalletauditissues' })
+    ]);
+    if (auditsJson.success) {
+      setStatus('connected', 'Connected');
+      allAudits = auditsJson.data || [];
+    } else {
+      throw new Error(auditsJson.error);
+    }
+    if (issuesJson.success) {
+      allIssues = issuesJson.data || [];
+    }
+    renderTable();
+  } catch(err) {
+    setStatus('disconnected', 'Connection failed');
+    document.getElementById('auditTableBody').innerHTML = '<tr><td colspan="11" class="empty-state">Failed to load data</td></tr>';
+  }
+}
+
+function renderTable() {
+  const tbody = document.getElementById('auditTableBody');
+  if (allAudits.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No audit records found</td></tr>';
+    return;
+  }
+
+  const filterFrom = document.getElementById('filterFrom').value;
+  const filterTo = document.getElementById('filterTo').value;
+  const filterResult = document.getElementById('filterResult').value;
+
+  // Filter audits
+  let filtered = [...allAudits];
+  if (filterFrom) {
+    const fromDate = new Date(filterFrom);
+    filtered = filtered.filter(a => {
+      const d = new Date(a['Audit Start Timestamp']);
+      return !isNaN(d.getTime()) && d >= fromDate;
+    });
+  }
+  if (filterTo) {
+    const toDate = new Date(filterTo);
+    toDate.setHours(23, 59, 59, 999);
+    filtered = filtered.filter(a => {
+      const d = new Date(a['Audit Start Timestamp']);
+      return !isNaN(d.getTime()) && d <= toDate;
+    });
+  }
+  if (filterResult) {
+    filtered = filtered.filter(a => (a['Audit Result'] || '').toUpperCase() === filterResult);
+  }
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No records match filters</td></tr>';
+    return;
+  }
+
+  // Show newest first
+  const sorted = [...filtered].reverse();
+  let html = '';
+  sorted.forEach((audit) => {
+    const realIdx = allAudits.indexOf(audit);
+    const resultClass = (audit['Audit Result'] || '').toUpperCase() === 'PASS' ? 'result-pass' : 'result-fail';
+    const palletId = (audit['Pallet ID'] || '').trim();
+    const issueCountForPallet = allIssues.filter(i => (i['Pallet ID'] || '').trim() === palletId).length;
+    html += '<tr>'
+      + '<td class="mono" style="font-weight:600;">' + (audit['Pallet ID'] || '—') + '</td>'
+      + '<td>' + (audit['Part Number'] || '—') + '</td>'
+      + '<td>' + fmtDate(audit['Audit Start Timestamp']) + '</td>'
+      + '<td style="text-align:center;">' + (audit['# of IMEIs on Pallet'] || '—') + '</td>'
+      + '<td style="text-align:center;">' + (audit['# of IMEIs Scanned During Audit'] || '—') + '</td>'
+      + '<td><span class="' + resultClass + '">' + (audit['Audit Result'] || '—') + '</span></td>'
+      + '<td style="text-align:center;' + (issueCountForPallet > 0 ? 'color:#fd7e14;font-weight:700;' : '') + '">' + issueCountForPallet + '</td>'
+      + '<td>' + (audit['Audit Performed By'] || '—') + '</td>'
+      + '<td>' + (audit['Notes'] || '—') + '</td>'
+      + '<td><button class="btn btn-primary" style="padding:4px 10px;font-size:11px;" onclick="showDetail(' + realIdx + ')">Details</button></td>'
+      + '<td><button style="padding:4px 10px;font-size:11px;background:#6c757d;color:white;border:none;border-radius:4px;cursor:pointer;font-weight:600;" onclick="reprintLabel(' + realIdx + ')">🖨️ Reprint</button></td>'
+      + '</tr>';
+  });
+  tbody.innerHTML = html;
+}
+
+function clearFilters() {
+  document.getElementById('filterFrom').value = '';
+  document.getElementById('filterTo').value = '';
+  document.getElementById('filterResult').value = '';
+  renderTable();
+}
+function showDetail(idx) {
+  const audit = allAudits[idx];
+  if (!audit) return;
+  currentDetailIdx = idx;
+
+  document.getElementById('detailTitle').textContent = 'Audit: ' + (audit['Pallet ID'] || '—');
+
+  let html = '';
+  html += '<div class="detail-row"><span class="detail-label">Pallet ID</span><span class="detail-value">' + (audit['Pallet ID'] || '—') + '</span></div>';
+  html += '<div class="detail-row"><span class="detail-label">Part Number</span><span class="detail-value">' + (audit['Part Number'] || '—') + '</span></div>';
+  html += '<div class="detail-row"><span class="detail-label">Timestamp</span><span class="detail-value">' + fmtDate(audit['Audit Start Timestamp']) + '</span></div>';
+  html += '<div class="detail-row"><span class="detail-label">IMEIs on Pallet</span><span class="detail-value">' + (audit['# of IMEIs on Pallet'] || '—') + '</span></div>';
+  html += '<div class="detail-row"><span class="detail-label">IMEIs Scanned</span><span class="detail-value">' + (audit['# of IMEIs Scanned During Audit'] || '—') + '</span></div>';
+
+  const resultClass = (audit['Audit Result'] || '').toUpperCase() === 'PASS' ? 'result-pass' : 'result-fail';
+  html += '<div class="detail-row"><span class="detail-label">Result</span><span class="' + resultClass + '">' + (audit['Audit Result'] || '—') + '</span></div>';
+  html += '<div class="detail-row"><span class="detail-label">Auditor</span><span class="detail-value">' + (audit['Audit Performed By'] || '—') + '</span></div>';
+  html += '<div class="detail-row"><span class="detail-label">Notes</span><span style="font-size:13px;">' + (audit['Notes'] || '—') + '</span></div>';
+
+  // Show scanned IMEIs
+  const imeis = [];
+  for (let i = 1; i <= 15; i++) {
+    const val = (audit['IMEI Scan #' + i] || '').trim();
+    if (val) imeis.push(val);
+  }
+  if (imeis.length > 0) {
+    html += '<div class="imei-list"><div class="imei-list-title">Scanned IMEIs (' + imeis.length + ')</div>';
+    imeis.forEach(imei => { html += '<span class="imei-chip">' + imei + '</span>'; });
+    html += '</div>';
+  }
+
+  // Show issues for this pallet
+  const palletId = (audit['Pallet ID'] || '').trim();
+  const palletIssues = allIssues.filter(i => (i['Pallet ID'] || '').trim() === palletId);
+  if (palletIssues.length > 0) {
+    html += '<div style="margin-top:16px;padding-top:12px;border-top:2px solid #fd7e14;">';
+    html += '<div style="font-size:12px;font-weight:600;color:#fd7e14;text-transform:uppercase;margin-bottom:10px;">Unit Issues (' + palletIssues.length + ')</div>';
+    palletIssues.forEach(issue => {
+      html += '<div style="padding:10px 12px;background:#fff8f0;border-left:3px solid #fd7e14;border-radius:4px;margin-bottom:8px;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;">'
+        + '<span style="font-family:Consolas,monospace;font-size:12px;font-weight:600;">' + (issue['IMEI'] || '—') + '</span>'
+        + '<span style="font-size:10px;color:#888;">' + (issue['Timestamp'] || '') + '</span>'
+        + '</div>'
+        + '<div style="font-size:13px;margin-top:4px;">' + (issue['Issue'] || '—') + '</div>'
+        + '<div style="font-size:11px;color:#888;margin-top:2px;">Reported by: ' + (issue['Reported By'] || '—') + '</div>'
+        + '</div>';
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('detailBody').innerHTML = html;
+  document.getElementById('detailModal').classList.add('show');
+}
+
+function closeDetail() { document.getElementById('detailModal').classList.remove('show'); }
+
+function exportAuditCSV() {
+  if (currentDetailIdx < 0) return;
+  const audit = allAudits[currentDetailIdx];
+  if (!audit) return;
+
+  const palletId = (audit['Pallet ID'] || '').trim();
+  const rows = [];
+  rows.push(['Pallet Audit Report']);
+  rows.push([]);
+  rows.push(['Pallet ID', audit['Pallet ID'] || '']);
+  rows.push(['Part Number', audit['Part Number'] || '']);
+  rows.push(['Audit Date', fmtDate(audit['Audit Start Timestamp'])]);
+  rows.push(['IMEIs on Pallet', audit['# of IMEIs on Pallet'] || '']);
+  rows.push(['IMEIs Validated', audit['# of IMEIs Scanned During Audit'] || '']);
+  rows.push(['Audit Result', audit['Audit Result'] || '']);
+  rows.push(['Auditor', audit['Audit Performed By'] || '']);
+  rows.push(['Notes', audit['Notes'] || '']);
+  rows.push([]);
+  rows.push(['Validated IMEIs']);
+
+  for (let i = 1; i <= 15; i++) {
+    const val = (audit['IMEI Scan #' + i] || '').trim();
+    if (val) rows.push([val]);
+  }
+
+  // Include issues
+  const palletIssues = allIssues.filter(i => (i['Pallet ID'] || '').trim() === palletId);
+  if (palletIssues.length > 0) {
+    rows.push([]);
+    rows.push(['Issues']);
+    rows.push(['IMEI', 'Issue', 'Reported By', 'Timestamp', 'Status']);
+    palletIssues.forEach(issue => {
+      rows.push([issue['IMEI'] || '', issue['Issue'] || '', issue['Reported By'] || '', issue['Timestamp'] || '', issue['Status'] || '']);
+    });
+  }
+
+  const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Audit_' + palletId + '_' + (audit['Audit Result'] || '') + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function reprintLabel(idx) {
+  const audit = allAudits[idx];
+  if (!audit) return;
+
+  const palletId = (audit['Pallet ID'] || '').trim();
+  const partNumber = (audit['Part Number'] || '').trim();
+  const ts = fmtDate(audit['Audit Start Timestamp']);
+  const resultText = (audit['Audit Result'] || '').toUpperCase() === 'PASS' ? '✓ OK To Ship' : '✗ Hold For Action';
+  const isFail = (audit['Audit Result'] || '').toUpperCase() !== 'PASS';
+  const matched = audit['# of IMEIs Scanned During Audit'] || '0';
+  const total = audit['# of IMEIs on Pallet'] || '0';
+  const auditor = audit['Audit Performed By'] || '';
+  const notes = audit['Notes'] || '';
+  const palletIssues = allIssues.filter(i => (i['Pallet ID'] || '').trim() === palletId);
+  const issueCount = palletIssues.length;
+  const logoUrl = 'https://riedel-networks.net/hs-fs/hubfs/Website-Assets/Referenzen/CTDI_Logo.webp?width=1773&height=386&name=CTDI_Logo.webp';
+
+  // Generate barcode
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  document.body.appendChild(svg);
+  try { JsBarcode(svg, palletId, { format: 'CODE128', width: 3, height: 70, displayValue: true, fontSize: 16, font: 'Consolas', margin: 4 }); } catch(e) {}
+  const barcodeHtml = svg.outerHTML;
+  document.body.removeChild(svg);
+
+  const win = window.open('', '_blank', 'width=400,height=600');
+  win.document.write('<!DOCTYPE html><html><head><style>'
+    + '* { box-sizing: border-box; margin: 0; padding: 0; }'
+    + 'html, body { width: 4in; height: 6in; margin: 0; padding: 0; overflow: hidden; }'
+    + '@page { size: 4in 6in; margin: 0; }'
+    + '.label { width: 4in; height: 6in; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 0.2in 0.25in; font-family: Segoe UI, Arial, sans-serif; overflow: hidden; }'
+    + '.logo img { width: 180px; display: block; margin: 0 auto; }'
+    + '.fwa { font-size: 36px; font-weight: 900; letter-spacing: 6px; text-align: center; }'
+    + '.divider { width: 100%; border-top: 2px solid #000; }'
+    + '.pallet-header { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; text-align: center; }'
+    + '.pallet-id { font-size: 36px; font-weight: 900; font-family: Arial Black, Consolas, monospace; text-align: center; }'
+    + '.part-number { font-size: 14px; text-align: center; color: #000; font-weight: 600; }'
+    + '.bc { text-align: center; }'
+    + '.bc svg { display: block; margin: 0 auto; max-width: 3.5in; }'
+    + '.result { font-size: 32px; font-weight: 900; text-align: center; color: #000; letter-spacing: 2px;' + (isFail ? ' border: 3px solid #000; padding: 4px 12px;' : '') + ' }'
+    + '.metrics { font-size: 13px; text-align: center; color: #000; line-height: 1.6; }'
+    + '.issues-recorded { font-size: 13px; text-align: center; color: #000; font-weight: 700; }'
+    + '.auditor { font-size: 12px; text-align: center; color: #000; margin-top: 4px; }'
+    + '.timestamp { font-size: 16px; text-align: center; color: #000; font-weight: 700; }'
+    + '.notes { font-size: 11px; text-align: center; color: #000; font-style: italic; margin-top: 4px; }'
+    + '</style></head><body><div class="label">'
+    + '<div class="logo"><img src="' + logoUrl + '"></div>'
+    + '<div class="divider"></div>'
+    + '<div class="fwa">FWA</div>'
+    + '<div class="divider"></div>'
+    + '<div class="pallet-header">Pallet Audit</div>'
+    + '<div class="pallet-id">' + palletId + '</div>'
+    + (partNumber ? '<div class="part-number">P/N: ' + partNumber + '</div>' : '')
+    + '<div class="bc">' + barcodeHtml + '</div>'
+    + '<div class="divider"></div>'
+    + '<div class="result">' + resultText + '</div>'
+    + '<div class="metrics">' + matched + ' / ' + total + ' IMEIs verified</div>'
+    + (issueCount > 0 ? '<div class="issues-recorded">Issues Recorded: ' + issueCount + '</div>' : '')
+    + '<div class="auditor">Auditor: ' + auditor + '</div>'
+    + '<div class="timestamp">' + ts + '</div>'
+    + (notes ? '<div class="notes">Note: ' + notes + '</div>' : '')
+    + '</div></body></html>');
+  win.document.close();
+  setTimeout(() => { win.print(); win.close(); }, 500);
+}
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast'); t.textContent = msg;
+  t.style.background = type==='success'?'#28a745':type==='error'?'#dc3545':'#fd7e14';
+  t.style.transform = 'translateX(0)';
+  setTimeout(() => { t.style.transform = 'translateX(120%)'; }, 2500);
+}
+
+function toggleSidebar() { document.querySelector('.sidebar').classList.toggle('open'); document.getElementById('sidebarOverlay').classList.toggle('show'); }
+function closeSidebar() { document.querySelector('.sidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('show'); }
+
+function toggleNavGroup(el) {
+  var group = el.nextElementSibling;
+  if (group && group.classList.contains('nav-group')) {
+    group.classList.toggle('open');
+    el.textContent = (group.classList.contains('open') ? '▼ ' : '▶ ') + el.textContent.replace(/^[▶▼] /, '');
+  }
+}
+document.querySelectorAll('.nav-group').forEach(function(g) {
+  if (g.querySelector('a.active')) {
+    g.classList.add('open');
+    var hdr = g.previousElementSibling;
+    if (hdr) hdr.textContent = hdr.textContent.replace('▶', '▼');
+  }
+});
+
+loadData();
+</script>
+</body>
+</html>
