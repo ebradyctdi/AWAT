@@ -1,0 +1,7 @@
+include:
+  - project: 'ctdi.cos/application-templates/cicd-templates'
+    ref: main
+    file: '/templates/gitlab-ci/static-site.yml'
+
+variables:
+  APP_NAME: "awat-production-tracker"

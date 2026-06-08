@@ -270,6 +270,13 @@ async function addEntry() {
     poInput.style.borderColor = '#dc3545'; poInput.focus();
     return;
   }
+  if (!config) {
+    showToast('Please select a Configuration', 'error');
+    document.getElementById('fConfig').style.borderColor = '#dc3545';
+    document.getElementById('fConfig').focus();
+    return;
+  }
+  document.getElementById('fConfig').style.borderColor = '#ddd';
   if (receivedPOs.has(po)) {
     showToast('PO#' + po + ' has already been received', 'error');
     poInput.style.borderColor = '#dc3545'; poInput.select();
