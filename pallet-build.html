@@ -1,0 +1,1274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frontier Shipping - Pallet Build</title>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #333; display: flex; min-height: 100vh; }
+  .sidebar { width: 220px; background: #1a3a5c; color: white; display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; }
+  .sidebar-brand { padding: 20px 16px 12px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+  .sidebar-brand .sub { font-size: 13px; opacity: 0.9; margin-top: 2px; font-weight: 700; letter-spacing: 0.5px; }
+  .sidebar-nav { flex: 1; padding: 12px 0; overflow-y: auto; }
+  .sidebar-nav a { display: flex; align-items: center; gap: 10px; padding: 10px 16px; color: rgba(255,255,255,0.7); text-decoration: none; font-size: 13px; transition: all 0.15s; border-left: 3px solid transparent; }
+  .sidebar-nav a:hover { background: rgba(255,255,255,0.08); color: white; }
+  .sidebar-nav a.active { background: rgba(255,255,255,0.12); color: white; border-left-color: #20c997; }
+  .sidebar-nav a .icon { font-size: 16px; width: 20px; text-align: center; }
+  .sidebar-nav .nav-section { font-size: 10px; text-transform: uppercase; color: rgba(255,255,255,0.3); padding: 16px 16px 6px; letter-spacing: 1px; }
+  .main-wrap { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+  .header { background: linear-gradient(135deg, #1a3a5c 0%, #2c5f8a 100%); color: white; padding: 20px 30px; display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 22px; font-weight: 600; }
+  .header-sub { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+  .header-right { display: flex; gap: 10px; align-items: center; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .status-dot.connected { background: #28a745; }
+  .status-dot.disconnected { background: #dc3545; }
+  .status-dot.pending { background: #fd7e14; }
+  .status-label { font-size: 11px; color: rgba(255,255,255,0.8); margin-left: 4px; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; width: 100%; }
+  .card { background: white; border-radius: 10px; padding: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 20px; }
+  .card h2 { font-size: 16px; color: #1a3a5c; margin-bottom: 16px; border-bottom: 2px solid #1a3a5c; padding-bottom: 8px; }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; font-weight: 600; }
+  .form-group select, .form-group textarea { width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+  .form-group textarea { resize: vertical; min-height: 60px; }
+  .submit-btn { padding: 12px 32px; background: #1a3a5c; color: white; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .submit-btn:hover { background: #2c5f8a; }
+  .submit-btn:disabled { background: #aaa; cursor: not-allowed; }
+  .success-box { background: #e8f5e9; border: 1px solid #28a745; border-radius: 8px; padding: 16px; text-align: center; margin-top: 16px; display: none; }
+  .success-box .pallet-id { font-size: 24px; font-weight: 700; font-family: Consolas, monospace; color: #1a3a5c; margin: 8px 0; }
+  .filter-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+  .filter-bar input { flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+  .filter-bar .count { font-size: 12px; color: #888; white-space: nowrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table th { background: #f8f9fa; color: #1a3a5c; font-weight: 600; text-align: left; padding: 10px 12px; border-bottom: 2px solid #dee2e6; }
+  table td { padding: 10px 12px; border-bottom: 1px solid #eee; }
+  table tr.clickable:hover { background: #f8f9fa; cursor: pointer; }
+  .empty-msg { text-align: center; color: #888; padding: 30px; font-size: 14px; }
+  .build-btn { padding: 5px 12px; background: #1a3a5c; color: white; border: none; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .build-btn:hover { background: #2c5f8a; }
+  .close-btn { padding: 5px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .close-btn:hover { background: #c82333; }
+  /* Build Modal */
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 500; justify-content: center; align-items: center; }
+  .modal-overlay.show { display: flex; }
+  .modal { background: white; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,0.3); max-width: 900px; width: 95%; max-height: 90vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(26,58,92,0.3) transparent; }
+  .modal::-webkit-scrollbar { width: 6px; }
+  .modal::-webkit-scrollbar-track { background: transparent; }
+  .modal::-webkit-scrollbar-thumb { background: rgba(26,58,92,0.3); border-radius: 3px; }
+  .modal::-webkit-scrollbar-thumb:hover { background: rgba(26,58,92,0.5); }
+  .modal-header { background: linear-gradient(135deg, #1a3a5c 0%, #2c5f8a 100%); padding: 16px 24px; color: white; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 1; border-radius: 10px 10px 0 0; }
+  .modal-header h3 { font-size: 16px; margin: 0; }
+  .modal-header .modal-sub { font-size: 11px; opacity: 0.7; margin-top: 2px; }
+  .modal-close { background: rgba(255,255,255,0.2); border: none; color: white; font-size: 18px; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; }
+  .modal-close:hover { background: rgba(255,255,255,0.3); }
+  .modal-body { padding: 20px 24px; }
+  .add-item-form { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+  .add-item-form input { flex: 1; min-width: 140px; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+  .add-item-form input:focus { border-color: #1a3a5c; outline: none; }
+  .add-item-form button { padding: 10px 20px; background: #1a3a5c; color: white; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .add-item-form button:hover { background: #2c5f8a; }
+  .add-item-form button:disabled { background: #999; cursor: not-allowed; }
+  .items-section h4 { font-size: 14px; color: #1a3a5c; margin-bottom: 12px; }
+  .items-count { font-size: 12px; color: #888; font-weight: normal; margin-left: 8px; }
+  .remove-btn { padding: 4px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .remove-btn:hover { background: #c82333; }
+  .remove-btn:disabled { background: #999; cursor: not-allowed; }
+  /* Close Confirmation Modal */
+  .confirm-modal { background: white; border-radius: 10px; padding: 28px; max-width: 400px; width: 90%; box-shadow: 0 8px 30px rgba(0,0,0,0.3); text-align: center; }
+  .confirm-modal h3 { color: #1a3a5c; margin-bottom: 10px; font-size: 18px; }
+  .confirm-modal p { color: #555; font-size: 14px; margin-bottom: 20px; }
+  .confirm-modal .pallet-id-display { font-size: 20px; font-weight: 700; font-family: Consolas, monospace; color: #dc3545; margin: 10px 0; }
+  .modal-actions { display: flex; gap: 12px; justify-content: center; }
+  .modal-actions button { padding: 10px 24px; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .modal-actions .confirm-btn { background: #dc3545; color: white; }
+  .modal-actions .confirm-btn:hover { background: #c82333; }
+  .modal-actions .cancel-btn { background: #e9ecef; color: #333; }
+  .modal-actions .cancel-btn:hover { background: #dee2e6; }
+  /* Loading Spinner */
+  .loading-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); z-index: 450; justify-content: center; align-items: center; }
+  .loading-overlay.show { display: flex; }
+  .spinner { width: 48px; height: 48px; border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid white; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 768px) {
+    .sidebar { transform: translateX(-100%); transition: transform 0.3s; z-index: 300; }
+    .sidebar.open { transform: translateX(0); }
+    .main-wrap { margin-left: 0; }
+    .hamburger { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: rgba(255,255,255,0.1); border: none; border-radius: 6px; cursor: pointer; color: white; font-size: 20px; margin-right: 12px; }
+    .add-item-form { flex-direction: column; }
+    .add-item-form input { min-width: 100%; }
+  }
+  @media (min-width: 769px) { .hamburger { display: none; } }
+</style>
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-brand"><img src="https://www.ctdi.com/wp-content/uploads/2020/12/ctdi-flat-logo-white-1024x223.png" alt="CTDI" style="width:100%;margin-bottom:10px;"><div class="sub">Frontier Shipping</div></div>
+  <div class="sidebar-nav">
+    <div class="nav-section">Views</div>
+    <a href="overview.html"><span class="icon">🏠</span> Overview</a>
+    <a href="pallet-tracker.html"><span class="icon">🔍</span> Pallet Tracker</a>
+    <a href="muse-tracker.html"><span class="icon">🎫</span> MUSE Tracker</a>
+    <div class="nav-section">Pallet Build</div>
+    <a href="pallet-build.html" class="active"><span class="icon">🔨</span> Pallet Build</a>
+    <div class="nav-section">Logistics</div>
+    <a href="routing.html"><span class="icon">🗺️</span> Routing</a>
+    <a href="packing-documents.html"><span class="icon">📄</span> Packing Documents</a>
+    <a href="pickup-scan.html"><span class="icon">🚚</span> Pickup Scan</a>
+    <a href="dropoff-scan.html"><span class="icon">📍</span> Dropoff Scan</a>
+    <a href="receipt-scan.html"><span class="icon">✅</span> Hub Receipt Scan</a>
+    <div class="nav-section">Exceptions</div>
+    <a href="report-exception.html"><span class="icon">⚠️</span> Report Exception</a>
+    <a href="open-exceptions.html"><span class="icon">🚨</span> Open Exceptions</a>
+    <div class="nav-section">System</div>
+    <a href="settings.html"><span class="icon">⚙️</span> Settings</a>
+    <a href="hub-locations.html"><span class="icon">🏭</span> Routing Locations</a>
+    <a href="line-hauls.html"><span class="icon">🛣️</span> Line Hauls</a>
+  </div>
+</nav>
+<div class="main-wrap">
+  <div class="header">
+    <div><button class="hamburger" onclick="document.querySelector('.sidebar').classList.toggle('open')">☰</button><h1>Pallet Build</h1><div class="header-sub">Create, build, and close pallets</div></div>
+    <div class="header-right">
+      <span class="status-dot disconnected" id="statusDot"></span>
+      <span class="status-label" id="statusLabel">Not connected</span>
+    </div>
+  </div>
+  <div class="container">
+    <!-- Operator Name -->
+    <div class="card" style="padding:16px 24px;margin-bottom:16px;display:flex;align-items:center;gap:16px;">
+      <label style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;white-space:nowrap;margin:0;">Operator Name</label>
+      <input type="text" id="operatorName" placeholder="Enter your name..." style="flex:1;max-width:300px;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;" autocomplete="off">
+      <button onclick="openCreatePalletModal()" style="padding:10px 24px;background:#1a3a5c;color:white;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;margin-left:auto;">+ Create Pallet</button>
+    </div>
+    <!-- Section 2: Open Pallets -->
+    <div class="card">
+      <h2>Open Pallets</h2>
+      <div class="filter-bar">
+        <input type="text" id="filterInput" placeholder="Filter by Pallet ID..." oninput="filterTable()">
+        <span class="count" id="countLabel">0 open</span>
+      </div>
+      <div id="palletTableWrap">
+        <div class="empty-msg" id="loadingMsg">Loading open pallets...</div>
+      </div>
+    </div>
+    <!-- Section 3: Closed Pallets, Not Shipped -->
+    <div class="card">
+      <h2>Closed Pallets, Not Shipped</h2>
+      <div class="filter-bar">
+        <input type="text" id="filterClosedInput" placeholder="Filter by Pallet ID..." oninput="filterClosedTable()">
+        <span class="count" id="closedCountLabel">0 closed</span>
+      </div>
+      <div id="closedTableWrap">
+        <div class="empty-msg">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- Build Modal -->
+<div class="modal-overlay" id="buildModalOverlay" onclick="if(event.target===this)closeBuildModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <div><h3 id="buildModalTitle">Pallet Build</h3><div class="modal-sub" id="buildModalSub"></div></div>
+      <button class="modal-close" onclick="closeBuildModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Origin & Final Destination display -->
+      <div id="palletLocationsDisplay" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
+        <div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;font-weight:600;letter-spacing:0.5px;">Origin</div>
+            <button onclick="openEditOriginModal()" style="background:none;border:none;color:#1a3a5c;font-size:11px;font-weight:600;cursor:pointer;text-decoration:underline;">Edit</button>
+          </div>
+          <div id="buildOriginName" style="font-size:14px;font-weight:700;color:#1a3a5c;margin-top:4px;"></div>
+          <div id="buildOriginAddr" style="font-size:11px;color:#555;margin-top:2px;"></div>
+        </div>
+        <div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;font-weight:600;letter-spacing:0.5px;">Final Destination</div>
+            <button onclick="openEditFinalDestModal()" style="background:none;border:none;color:#1a3a5c;font-size:11px;font-weight:600;cursor:pointer;text-decoration:underline;">Edit</button>
+          </div>
+          <div id="buildFinalDestName" style="font-size:14px;font-weight:700;color:#1a3a5c;margin-top:4px;"></div>
+          <div id="buildFinalDestAddr" style="font-size:11px;color:#555;margin-top:2px;"></div>
+        </div>
+      </div>
+      <div style="margin-bottom: 20px;">
+        <h4 style="font-size:14px;color:#1a3a5c;margin-bottom:10px;">Add Item</h4>
+        <div style="margin-bottom:10px;">
+          <label style="display:block;font-size:11px;font-weight:600;color:#666;margin-bottom:4px;text-transform:uppercase;">Added By</label>
+          <input type="text" id="addedByInput" placeholder="Your name..." style="width:100%;max-width:250px;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;" autocomplete="off">
+        </div>
+        <div class="add-item-form" style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;align-items:flex-end;">
+          <div style="flex:2;min-width:140px;">
+            <label style="display:block;font-size:11px;font-weight:600;color:#666;margin-bottom:4px;text-transform:uppercase;">MUSE Ticket #</label>
+            <input type="text" id="itemCodeInput" autocomplete="off" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+          </div>
+          <div style="flex:3;min-width:160px;">
+            <label style="display:block;font-size:11px;font-weight:600;color:#666;margin-bottom:4px;text-transform:uppercase;">Description / Note <span style="font-weight:400;text-transform:none;">(Optional)</span></label>
+            <input type="text" id="itemDescInput" autocomplete="off" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+          </div>
+          <div style="flex:2;min-width:120px;">
+            <label style="display:block;font-size:11px;font-weight:600;color:#666;margin-bottom:4px;text-transform:uppercase;">Serial # <span style="font-weight:400;text-transform:none;">(Optional)</span></label>
+            <input type="text" id="itemSerialInput" autocomplete="off" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+          </div>
+          <button id="addItemBtn" onclick="addItem()" style="padding:10px 20px;background:#1a3a5c;color:white;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">Add Item</button>
+          <input type="hidden" id="itemQtyInput" value="1">
+        </div>
+      </div>
+      <div class="items-section">
+        <h4>Items on Pallet <span class="items-count" id="itemsCount">0 items on pallet</span></h4>
+        <div id="itemsTableWrap">
+          <div class="empty-msg">No items on this pallet</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- Close Confirmation Modal -->
+<div class="modal-overlay" id="closeModalOverlay" onclick="if(event.target===this)closeCloseModal()">
+  <div class="confirm-modal">
+    <h3>Close Pallet?</h3>
+    <div class="pallet-id-display" id="closeModalPalletId"></div>
+    <p>This will seal the pallet and prevent further modifications. Are you sure?</p>
+    <div class="modal-actions">
+      <button class="cancel-btn" onclick="closeCloseModal()">Cancel</button>
+      <button class="confirm-btn" id="confirmCloseBtn" onclick="confirmClosePallet()">Close Pallet</button>
+    </div>
+  </div>
+</div>
+<!-- Details Modal (read-only view of items on closed pallet) -->
+<div class="modal-overlay" id="detailsModalOverlay" onclick="if(event.target===this)closeDetailsModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <div><h3 id="detailsModalTitle">Pallet Details</h3><div class="modal-sub" id="detailsModalSub"></div></div>
+      <button class="modal-close" onclick="closeDetailsModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="detailsInfoSection"></div>
+      <div class="items-section">
+        <h4>Items on Pallet <span class="items-count" id="detailsItemsCount">0 items</span></h4>
+        <div id="detailsItemsTable">
+          <div class="empty-msg">No items on this pallet</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- Reopen Confirmation Modal -->
+<div class="modal-overlay" id="reopenModalOverlay" onclick="if(event.target===this)closeReopenModal()">
+  <div class="confirm-modal">
+    <h3>Reopen Pallet?</h3>
+    <div class="pallet-id-display" id="reopenModalPalletId"></div>
+    <p>This will move the pallet back to Open status and clear the close information. Are you sure?</p>
+    <div class="modal-actions">
+      <button class="cancel-btn" onclick="closeReopenModal()">Cancel</button>
+      <button class="confirm-btn" id="confirmReopenBtn" style="background:#fd7e14;" onclick="confirmReopenPallet()">Reopen Pallet</button>
+    </div>
+  </div>
+</div>
+<!-- Label Print Modal -->
+<div class="modal-overlay" id="labelModalOverlay" onclick="if(event.target===this)closeLabelModal()">
+  <div class="modal" style="max-width:500px;padding:0;">
+    <div class="modal-header">
+      <div><h3>Pallet Label</h3><div class="modal-sub">4" × 6" preview</div></div>
+      <button class="modal-close" onclick="closeLabelModal()">✕</button>
+    </div>
+    <div style="padding:20px 24px;text-align:center;overflow-y:auto;max-height:calc(90vh - 120px);">
+      <div id="labelPreview"></div>
+      <button onclick="printLabel()" style="margin-top:16px;padding:12px 32px;background:#1a3a5c;color:white;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">🖨️ Print Label</button>
+    </div>
+  </div>
+</div>
+<!-- Edit Origin Modal -->
+<div class="modal-overlay" id="editOriginModalOverlay" onclick="if(event.target===this)closeEditOriginModal()" style="z-index:550;">
+  <div style="background:white;border-radius:10px;width:400px;max-width:95vw;box-shadow:0 8px 30px rgba(0,0,0,0.25);">
+    <div style="background:linear-gradient(135deg,#1a3a5c,#2c5f8a);color:white;padding:14px 20px;border-radius:10px 10px 0 0;">
+      <h3 style="font-size:15px;margin:0;">Edit Origin</h3>
+    </div>
+    <div style="padding:16px 20px;">
+      <label style="display:block;font-size:11px;font-weight:600;color:#666;margin-bottom:4px;text-transform:uppercase;">Origin (Hub)</label>
+      <select id="editOriginSelect" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px;background:white;"></select>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid #eee;display:flex;gap:12px;justify-content:flex-end;">
+      <button onclick="closeEditOriginModal()" style="padding:8px 18px;background:#e9ecef;color:#333;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
+      <button onclick="saveEditOrigin()" style="padding:8px 18px;background:#1a3a5c;color:white;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Save</button>
+    </div>
+  </div>
+</div>
+<!-- Edit Final Destination Modal -->
+<div class="modal-overlay" id="editFinalDestModalOverlay" onclick="if(event.target===this)closeEditFinalDestModal()" style="z-index:550;">
+  <div style="background:white;border-radius:10px;width:440px;max-width:95vw;box-shadow:0 8px 30px rgba(0,0,0,0.25);">
+    <div style="background:linear-gradient(135deg,#1a3a5c,#2c5f8a);color:white;padding:14px 20px;border-radius:10px 10px 0 0;">
+      <h3 style="font-size:15px;margin:0;">Edit Final Destination</h3>
+    </div>
+    <div style="padding:16px 20px;">
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button type="button" id="editDestModeExisting" onclick="setEditDestMode('existing')" style="flex:1;padding:8px;border:2px solid #1a3a5c;background:#1a3a5c;color:white;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Existing Location</button>
+        <button type="button" id="editDestModeCustom" onclick="setEditDestMode('custom')" style="flex:1;padding:8px;border:2px solid #ddd;background:white;color:#333;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Custom Address</button>
+      </div>
+      <div id="editDestExistingWrap">
+        <select id="editFinalDestSelect" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px;background:white;"></select>
+      </div>
+      <div id="editDestCustomWrap" style="display:none;">
+        <input type="text" id="editCustomDestName" placeholder="Location Name" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:8px;">
+        <input type="text" id="editCustomDestStreet" placeholder="Street Address" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:8px;">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;">
+          <input type="text" id="editCustomDestCity" placeholder="City" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+          <input type="text" id="editCustomDestState" placeholder="State" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+          <input type="text" id="editCustomDestZip" placeholder="ZIP" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+        </div>
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid #eee;display:flex;gap:12px;justify-content:flex-end;">
+      <button onclick="closeEditFinalDestModal()" style="padding:8px 18px;background:#e9ecef;color:#333;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
+      <button onclick="saveEditFinalDest()" style="padding:8px 18px;background:#1a3a5c;color:white;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Save</button>
+    </div>
+  </div>
+</div>
+<!-- Create Pallet Modal -->
+<div class="modal-overlay" id="createPalletModalOverlay" onclick="if(event.target===this)closeCreatePalletModal()">
+  <div style="background:white;border-radius:10px;width:480px;max-width:95vw;box-shadow:0 8px 30px rgba(0,0,0,0.25);">
+    <div style="background:linear-gradient(135deg,#1a3a5c,#2c5f8a);color:white;padding:18px 24px;border-radius:10px 10px 0 0;">
+      <h3 style="font-size:16px;margin:0;">Create New Pallet</h3>
+      <div style="font-size:12px;opacity:0.8;margin-top:2px;">Select origin and final destination</div>
+    </div>
+    <div style="padding:20px 24px;">
+      <div class="form-group">
+        <label>Origin (Hub Location)</label>
+        <select id="originSelect"><option value="">— Select Origin —</option></select>
+      </div>
+      <div class="form-group">
+        <label>Final Destination</label>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <button type="button" id="destModeExisting" onclick="setDestMode('existing')" style="flex:1;padding:8px;border:2px solid #1a3a5c;background:#1a3a5c;color:white;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Existing Location</button>
+          <button type="button" id="destModeCustom" onclick="setDestMode('custom')" style="flex:1;padding:8px;border:2px solid #ddd;background:white;color:#333;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Custom Address</button>
+        </div>
+        <div id="destExistingWrap">
+          <select id="finalDestSelect"><option value="">— Select Final Destination —</option></select>
+        </div>
+        <div id="destCustomWrap" style="display:none;">
+          <input type="text" id="customDestName" placeholder="Location Name" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:8px;">
+          <input type="text" id="customDestStreet" placeholder="Street Address" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:8px;">
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;">
+            <input type="text" id="customDestCity" placeholder="City" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+            <input type="text" id="customDestState" placeholder="State" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+            <input type="text" id="customDestZip" placeholder="ZIP" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Description (optional)</label>
+        <textarea id="createDesc" placeholder="Contents, notes, etc." style="min-height:50px;"></textarea>
+      </div>
+    </div>
+    <div style="padding:16px 24px;border-top:1px solid #eee;display:flex;justify-content:space-between;align-items:center;">
+      <button onclick="closeCreatePalletModal()" style="padding:10px 20px;background:#e9ecef;color:#333;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">Cancel</button>
+      <button id="createBtn" onclick="createPallet()" style="padding:10px 24px;background:#1a3a5c;color:white;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">Create Pallet</button>
+    </div>
+    <div class="success-box" id="createSuccess" style="margin:0 24px 20px;border-radius:8px;">
+      <div style="font-size:14px;color:#28a745;font-weight:600;">✓ Pallet Created</div>
+      <div class="pallet-id" id="newPalletId"></div>
+      <button onclick="resetCreateForm()" style="padding:8px 20px;background:#1a3a5c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;margin-top:8px;">Create Another</button>
+      <button onclick="var pid=document.getElementById('newPalletId').textContent;closeCreatePalletModal();showLabelModal(pid)" style="padding:8px 20px;background:#17a2b8;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;margin-top:8px;margin-left:8px;">Print Label</button>
+    </div>
+  </div>
+</div>
+<!-- Loading Spinner -->
+<div class="loading-overlay" id="loadingOverlay"><div class="spinner"></div></div>
+<div id="toast" style="position:fixed;top:80px;right:30px;padding:14px 24px;border-radius:6px;color:white;font-size:14px;font-weight:500;box-shadow:0 4px 12px rgba(0,0,0,0.2);z-index:600;transform:translateX(120%);transition:transform 0.3s ease;"></div>
+<script>
+const URL_KEY = 'fs_script_url';
+let scriptUrl = '', _jsonpCounter = 0;
+let allPallets = [];
+let allOpenPallets = [];
+let allClosedPallets = [];
+let allPalletItems = [];
+let currentPalletId = null;
+let palletToClose = null;
+let hubLocations = [];
+try { scriptUrl = localStorage.getItem(URL_KEY) || 'https://script.google.com/macros/s/AKfycbwv4__hrZ716OYCEv17rqPXm8JWYLydiq85jl6QE_3jlyw7TaJg_gEnHlHTsHqfzwjA/exec'; } catch(e) {}
+
+function getUser() { return localStorage.getItem('fs_username') || 'Operator'; }
+
+function jsonpRequest(url, params) {
+  return new Promise((resolve, reject) => {
+    const cb = '_jsonpCb_' + (++_jsonpCounter) + '_' + Date.now();
+    const qs = Object.entries(params||{}).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');
+    const sep = url.includes('?') ? '&' : '?';
+    const fullUrl = url + sep + 'callback=' + cb + (qs ? '&' + qs : '');
+    const timeout = setTimeout(() => { cleanup(); reject(new Error('Timed out')); }, 15000);
+    function cleanup() { clearTimeout(timeout); delete window[cb]; if (s.parentNode) s.parentNode.removeChild(s); }
+    window[cb] = function(data) { cleanup(); resolve(data); };
+    const s = document.createElement('script');
+    s.src = fullUrl; s.onerror = function() { cleanup(); reject(new Error('Network error')); };
+    document.head.appendChild(s);
+  });
+}
+
+function setStatus(state, label) {
+  document.getElementById('statusDot').className = 'status-dot ' + state;
+  document.getElementById('statusLabel').textContent = label;
+}
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast'); t.textContent = msg;
+  t.style.background = type==='success'?'#28a745':type==='error'?'#dc3545':'#fd7e14';
+  t.style.transform = 'translateX(0)';
+  setTimeout(() => { t.style.transform = 'translateX(120%)'; }, 2500);
+}
+
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
+
+function fmtDate(str) {
+  if (!str) return '—';
+  const s = str.toString().trim();
+  if (!s) return '—';
+  const m = s.match(/(\d+)\/(\d+)\/(\d+)\s+(\d+):(\d+)/);
+  if (m) {
+    const month = m[1], day = m[2], hr = parseInt(m[4]), min = m[5];
+    const ampm = hr >= 12 ? 'PM' : 'AM';
+    const h12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+    return month + '/' + day + '/' + m[3] + ', ' + h12 + ':' + min + ' ' + ampm;
+  }
+  return s;
+}
+
+// ===== OPERATOR NAME =====
+function getOperatorName() {
+  const name = document.getElementById('operatorName').value.trim();
+  if (!name) {
+    showToast('Enter your name in "Operator Name" at the top', 'error');
+    document.getElementById('operatorName').focus();
+    return null;
+  }
+  return name;
+}
+
+// ===== CREATE PALLET =====
+let destMode = 'existing';
+
+function setDestMode(mode) {
+  destMode = mode;
+  document.getElementById('destExistingWrap').style.display = mode === 'existing' ? 'block' : 'none';
+  document.getElementById('destCustomWrap').style.display = mode === 'custom' ? 'block' : 'none';
+  const existBtn = document.getElementById('destModeExisting');
+  const customBtn = document.getElementById('destModeCustom');
+  if (mode === 'existing') {
+    existBtn.style.background = '#1a3a5c'; existBtn.style.color = 'white'; existBtn.style.borderColor = '#1a3a5c';
+    customBtn.style.background = 'white'; customBtn.style.color = '#333'; customBtn.style.borderColor = '#ddd';
+  } else {
+    customBtn.style.background = '#1a3a5c'; customBtn.style.color = 'white'; customBtn.style.borderColor = '#1a3a5c';
+    existBtn.style.background = 'white'; existBtn.style.color = '#333'; existBtn.style.borderColor = '#ddd';
+  }
+}
+
+function getSelectedFinalDest() {
+  if (destMode === 'existing') {
+    return document.getElementById('finalDestSelect').value;
+  } else {
+    const name = document.getElementById('customDestName').value.trim();
+    const street = document.getElementById('customDestStreet').value.trim();
+    const city = document.getElementById('customDestCity').value.trim();
+    const state = document.getElementById('customDestState').value.trim();
+    const zip = document.getElementById('customDestZip').value.trim();
+    if (!name && !street && !city) return '';
+    // Format: "Name | Street, City, State ZIP"
+    let parts = [];
+    if (name) parts.push(name);
+    let addrParts = [];
+    if (street) addrParts.push(street);
+    if (city) addrParts.push(city);
+    if (state && zip) addrParts.push(state + ' ' + zip);
+    else if (state) addrParts.push(state);
+    else if (zip) addrParts.push(zip);
+    if (addrParts.length) parts.push(addrParts.join(', '));
+    return parts.join(' | ');
+  }
+}
+
+function openCreatePalletModal() {
+  const operatorName = getOperatorName();
+  if (!operatorName) return;
+  resetCreateForm();
+  document.getElementById('createPalletModalOverlay').classList.add('show');
+}
+
+function closeCreatePalletModal() {
+  document.getElementById('createPalletModalOverlay').classList.remove('show');
+  resetCreateForm();
+}
+
+async function createPallet() {
+  const origin = document.getElementById('originSelect').value;
+  const finalDest = getSelectedFinalDest();
+  const description = document.getElementById('createDesc').value.trim();
+  if (!origin) { showToast('Select an origin', 'error'); return; }
+  if (!finalDest) { showToast('Enter a final destination', 'error'); return; }
+  const operatorName = getOperatorName();
+  if (!operatorName) return;
+
+  const btn = document.getElementById('createBtn');
+  btn.disabled = true; btn.textContent = 'Creating...';
+
+  try {
+    const json = await jsonpRequest(scriptUrl, {
+      action: 'createpallet',
+      origin: origin,
+      finaldest: finalDest,
+      description: description,
+      user: operatorName
+    });
+    if (json.success) {
+      document.getElementById('newPalletId').textContent = json.palletId;
+      document.getElementById('createSuccess').style.display = 'block';
+      showToast('Pallet ' + json.palletId + ' created', 'success');
+      await refreshPallets();
+    } else {
+      showToast(json.error || 'Failed to create pallet', 'error');
+    }
+  } catch(err) { showToast('Error: ' + err.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Create Pallet';
+}
+
+function resetCreateForm() {
+  document.getElementById('originSelect').selectedIndex = 0;
+  document.getElementById('finalDestSelect').selectedIndex = 0;
+  document.getElementById('customDestName').value = '';
+  document.getElementById('customDestStreet').value = '';
+  document.getElementById('customDestCity').value = '';
+  document.getElementById('customDestState').value = '';
+  document.getElementById('customDestZip').value = '';
+  document.getElementById('createDesc').value = '';
+  document.getElementById('createSuccess').style.display = 'none';
+  setDestMode('existing');
+}
+
+// ===== OPEN PALLETS TABLE =====
+function getItemsCountForPallet(palletId) {
+  return allPalletItems.filter(item =>
+    (item['Pallet ID']||'').toString().trim() === palletId.toString().trim() &&
+    (item['Status']||'').toLowerCase() === 'on pallet'
+  ).length;
+}
+
+function renderOpenTable(pallets) {
+  const wrap = document.getElementById('palletTableWrap');
+  document.getElementById('countLabel').textContent = pallets.length + ' open';
+  if (!pallets || pallets.length === 0) {
+    wrap.innerHTML = '<div class="empty-msg">No open pallets found.</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Pallet ID</th><th>Origin</th><th>Description</th><th style="text-align:center;">Items Count</th><th>Open Date</th><th>Actions</th></tr></thead><tbody>';
+  pallets.forEach(p => {
+    const pid = p['Pallet ID'] || '';
+    const itemsCount = getItemsCountForPallet(pid);
+    html += '<tr>';
+    html += '<td><strong>' + escHtml(pid) + '</strong></td>';
+    html += '<td>' + escHtml(p['Origin']||'') + '</td>';
+    html += '<td>' + escHtml(p['Description']||'—') + '</td>';
+    html += '<td style="text-align:center;font-weight:600;">' + itemsCount + '</td>';
+    html += '<td>' + fmtDate(p['Open Date']||p['Created']||'') + '</td>';
+    html += '<td><button class="build-btn" onclick="openBuildModal(\'' + escHtml(pid).replace(/'/g, "\\'") + '\')">Build / Review</button> <button class="build-btn" style="background:#17a2b8;" onclick="showLabelModal(\'' + escHtml(pid).replace(/'/g, "\\'") + '\')">Print</button> <button class="close-btn" onclick="showCloseModal(\'' + escHtml(pid).replace(/'/g, "\\'") + '\')">Close</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function filterTable() {
+  const q = document.getElementById('filterInput').value.trim().toLowerCase();
+  if (!q) { renderOpenTable(allOpenPallets); return; }
+  const filtered = allOpenPallets.filter(p => (p['Pallet ID']||'').toLowerCase().includes(q));
+  renderOpenTable(filtered);
+}
+
+// ===== RECENTLY CLOSED TABLE =====
+function renderClosedTable(pallets) {
+  const wrap = document.getElementById('closedTableWrap');
+  document.getElementById('closedCountLabel').textContent = pallets.length + ' closed';
+  if (!pallets || pallets.length === 0) {
+    wrap.innerHTML = '<div class="empty-msg">No closed pallets awaiting shipment.</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Pallet ID</th><th>Origin</th><th>Description</th><th style="text-align:center;">Items Count</th><th>Closed By</th><th>Close Date</th><th>Actions</th></tr></thead><tbody>';
+  pallets.forEach(p => {
+    const pid = p['Pallet ID'] || '';
+    const itemsCount = getItemsCountForPallet(pid);
+    html += '<tr>';
+    html += '<td><strong>' + escHtml(pid) + '</strong></td>';
+    html += '<td>' + escHtml(p['Origin']||'') + '</td>';
+    html += '<td>' + escHtml(p['Description']||'—') + '</td>';
+    html += '<td style="text-align:center;font-weight:600;">' + itemsCount + '</td>';
+    html += '<td>' + escHtml(p['Closed By']||'') + '</td>';
+    html += '<td>' + fmtDate(p['Close Date']||'') + '</td>';
+    html += '<td><button class="build-btn" onclick="showDetailsModal(\'' + escHtml(pid).replace(/'/g, "\\'") + '\')">Details</button> <button class="build-btn" style="background:#17a2b8;" onclick="showLabelModal(\'' + escHtml(pid).replace(/'/g, "\\'") + '\')">Print</button> <button class="build-btn" style="background:#fd7e14;" onclick="showReopenModal(\'' + escHtml(pid).replace(/'/g, "\\'") + '\')">Reopen</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function filterClosedTable() {
+  const q = document.getElementById('filterClosedInput').value.trim().toLowerCase();
+  if (!q) { renderClosedTable(allClosedPallets); return; }
+  const filtered = allClosedPallets.filter(p => (p['Pallet ID']||'').toLowerCase().includes(q));
+  renderClosedTable(filtered);
+}// ===== BUILD MODAL =====
+function openBuildModal(palletId) {
+  currentPalletId = palletId;
+  const pallet = allOpenPallets.find(p => (p['Pallet ID']||'') === palletId);
+  document.getElementById('buildModalTitle').textContent = palletId;
+  document.getElementById('buildModalSub').textContent = pallet ? (pallet['Origin']||'') : '';
+  
+  // Populate origin & final destination display
+  populateBuildLocations(pallet);
+  
+  document.getElementById('buildModalOverlay').classList.add('show');
+  document.getElementById('itemCodeInput').value = '';
+  document.getElementById('itemDescInput').value = '';
+  document.getElementById('itemQtyInput').value = '1';
+  document.getElementById('itemSerialInput').value = '';
+  renderModalItems();
+  setTimeout(() => { document.getElementById('itemCodeInput').focus(); }, 100);
+}
+
+function populateBuildLocations(pallet) {
+  if (!pallet) return;
+  // Origin
+  const originName = pallet['Origin'] || '—';
+  const originAddr = getHubAddress(originName);
+  document.getElementById('buildOriginName').textContent = originName;
+  document.getElementById('buildOriginAddr').textContent = originAddr;
+  
+  // Final Destination
+  const finalDest = (pallet['Final Destination'] || '').trim();
+  if (finalDest) {
+    if (finalDest.includes('|')) {
+      document.getElementById('buildFinalDestName').textContent = finalDest.split('|')[0].trim();
+      document.getElementById('buildFinalDestAddr').textContent = finalDest.split('|')[1] ? finalDest.split('|')[1].trim() : '';
+    } else {
+      document.getElementById('buildFinalDestName').textContent = finalDest;
+      document.getElementById('buildFinalDestAddr').textContent = getHubAddress(finalDest);
+    }
+  } else {
+    document.getElementById('buildFinalDestName').textContent = '— Not set —';
+    document.getElementById('buildFinalDestAddr').textContent = '';
+  }
+}
+
+// Edit Origin
+function openEditOriginModal() {
+  const sel = document.getElementById('editOriginSelect');
+  sel.innerHTML = '<option value="">— Select Origin —</option>';
+  hubLocations.filter(h => (h['Location Type']||'').toLowerCase() === 'hub').forEach(h => {
+    const opt = document.createElement('option');
+    opt.value = h['Name'];
+    opt.textContent = (h['Location ID']||'') + ' — ' + (h['Name']||'');
+    sel.appendChild(opt);
+  });
+  const pallet = allOpenPallets.find(p => (p['Pallet ID']||'') === currentPalletId);
+  if (pallet) sel.value = pallet['Origin'] || '';
+  document.getElementById('editOriginModalOverlay').classList.add('show');
+}
+
+function closeEditOriginModal() {
+  document.getElementById('editOriginModalOverlay').classList.remove('show');
+}
+
+async function saveEditOrigin() {
+  const newOrigin = document.getElementById('editOriginSelect').value;
+  if (!newOrigin) { showToast('Select an origin', 'error'); return; }
+  try {
+    await jsonpRequest(scriptUrl, { action: 'updatepalletorigin', palletid: currentPalletId, origin: newOrigin, user: getOperatorName() || getUser() });
+    showToast('Origin updated', 'success');
+    closeEditOriginModal();
+    await refreshPallets();
+    const pallet = allOpenPallets.find(p => (p['Pallet ID']||'') === currentPalletId);
+    populateBuildLocations(pallet);
+  } catch(err) { showToast('Error: ' + err.message, 'error'); }
+}
+
+// Edit Final Destination
+let editDestModeState = 'existing';
+
+function setEditDestMode(mode) {
+  editDestModeState = mode;
+  document.getElementById('editDestExistingWrap').style.display = mode === 'existing' ? 'block' : 'none';
+  document.getElementById('editDestCustomWrap').style.display = mode === 'custom' ? 'block' : 'none';
+  const existBtn = document.getElementById('editDestModeExisting');
+  const customBtn = document.getElementById('editDestModeCustom');
+  if (mode === 'existing') {
+    existBtn.style.background = '#1a3a5c'; existBtn.style.color = 'white'; existBtn.style.borderColor = '#1a3a5c';
+    customBtn.style.background = 'white'; customBtn.style.color = '#333'; customBtn.style.borderColor = '#ddd';
+  } else {
+    customBtn.style.background = '#1a3a5c'; customBtn.style.color = 'white'; customBtn.style.borderColor = '#1a3a5c';
+    existBtn.style.background = 'white'; existBtn.style.color = '#333'; existBtn.style.borderColor = '#ddd';
+  }
+}
+
+function openEditFinalDestModal() {
+  const sel = document.getElementById('editFinalDestSelect');
+  sel.innerHTML = '<option value="">— Select Final Destination —</option>';
+  hubLocations.filter(h => (h['Location Type']||'').toLowerCase() === 'final location').forEach(h => {
+    const opt = document.createElement('option');
+    opt.value = h['Name'];
+    opt.textContent = (h['Location ID']||'') + ' — ' + (h['Name']||'');
+    sel.appendChild(opt);
+  });
+  // Pre-fill
+  const pallet = allOpenPallets.find(p => (p['Pallet ID']||'') === currentPalletId);
+  const fd = pallet ? (pallet['Final Destination']||'') : '';
+  if (fd.includes('|')) {
+    setEditDestMode('custom');
+    const parts = fd.split('|');
+    document.getElementById('editCustomDestName').value = parts[0].trim();
+    const addrParts = (parts[1]||'').trim().split(',').map(s=>s.trim());
+    document.getElementById('editCustomDestStreet').value = addrParts[0] || '';
+    document.getElementById('editCustomDestCity').value = addrParts[1] || '';
+    const stateZip = (addrParts[2]||'').trim().split(' ');
+    document.getElementById('editCustomDestState').value = stateZip[0] || '';
+    document.getElementById('editCustomDestZip').value = stateZip[1] || '';
+  } else {
+    setEditDestMode('existing');
+    sel.value = fd;
+    document.getElementById('editCustomDestName').value = '';
+    document.getElementById('editCustomDestStreet').value = '';
+    document.getElementById('editCustomDestCity').value = '';
+    document.getElementById('editCustomDestState').value = '';
+    document.getElementById('editCustomDestZip').value = '';
+  }
+  document.getElementById('editFinalDestModalOverlay').classList.add('show');
+}
+
+function closeEditFinalDestModal() {
+  document.getElementById('editFinalDestModalOverlay').classList.remove('show');
+}
+
+async function saveEditFinalDest() {
+  let finalDest = '';
+  if (editDestModeState === 'existing') {
+    finalDest = document.getElementById('editFinalDestSelect').value;
+  } else {
+    const name = document.getElementById('editCustomDestName').value.trim();
+    const street = document.getElementById('editCustomDestStreet').value.trim();
+    const city = document.getElementById('editCustomDestCity').value.trim();
+    const state = document.getElementById('editCustomDestState').value.trim();
+    const zip = document.getElementById('editCustomDestZip').value.trim();
+    if (!name && !street && !city) { showToast('Enter destination info', 'error'); return; }
+    let parts = [];
+    if (name) parts.push(name);
+    let addrParts = [];
+    if (street) addrParts.push(street);
+    if (city) addrParts.push(city);
+    if (state && zip) addrParts.push(state + ' ' + zip);
+    else if (state) addrParts.push(state);
+    else if (zip) addrParts.push(zip);
+    if (addrParts.length) parts.push(addrParts.join(', '));
+    finalDest = parts.join(' | ');
+  }
+  if (!finalDest) { showToast('Select or enter a destination', 'error'); return; }
+  try {
+    await jsonpRequest(scriptUrl, { action: 'updatepalletfinaldest', palletid: currentPalletId, finaldest: finalDest, user: getOperatorName() || getUser() });
+    showToast('Final Destination updated', 'success');
+    closeEditFinalDestModal();
+    await refreshPallets();
+    const pallet = allOpenPallets.find(p => (p['Pallet ID']||'') === currentPalletId);
+    populateBuildLocations(pallet);
+  } catch(err) { showToast('Error: ' + err.message, 'error'); }
+}
+
+function closeBuildModal() {
+  currentPalletId = null;
+  document.getElementById('buildModalOverlay').classList.remove('show');
+  renderOpenTable(allOpenPallets);
+}
+
+function renderModalItems() {
+  const wrap = document.getElementById('itemsTableWrap');
+  const items = allPalletItems.filter(item =>
+    (item['Pallet ID']||'').toString().trim() === currentPalletId.toString().trim() &&
+    (item['Status']||'').toLowerCase() === 'on pallet'
+  );
+  document.getElementById('itemsCount').textContent = items.length + ' item' + (items.length !== 1 ? 's' : '') + ' on pallet';
+  if (items.length === 0) {
+    wrap.innerHTML = '<div class="empty-msg">No items on this pallet</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>#</th><th>MUSE Ticket #</th><th>Description / Note</th><th>Qty</th><th>Serial #</th><th>Date Added</th><th>Added By</th><th>Action</th></tr></thead><tbody>';
+  items.forEach((item, i) => {
+    html += '<tr>';
+    html += '<td>' + (i + 1) + '</td>';
+    html += '<td><strong>' + escHtml(item['MUSE Ticket']||'') + '</strong></td>';
+    html += '<td>' + escHtml(item['Description Note']||'—') + '</td>';
+    html += '<td>' + escHtml(item['Item Quantity']||'1') + '</td>';
+    html += '<td>' + escHtml(item['Item Serial Number']||'—') + '</td>';
+    html += '<td>' + fmtDate(item['Date Added']||item['Timestamp']||'') + '</td>';
+    html += '<td>' + escHtml(item['Added By']||item['User']||'') + '</td>';
+    html += '<td><button class="remove-btn" onclick="removeItem(' + (item['_row']||0) + ', this)">Remove</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+async function addItem() {
+  const addedBy = document.getElementById('addedByInput').value.trim();
+  const code = document.getElementById('itemCodeInput').value.trim();
+  const desc = document.getElementById('itemDescInput').value.trim();
+  const qty = document.getElementById('itemQtyInput').value.trim() || '1';
+  const serial = document.getElementById('itemSerialInput').value.trim();
+  if (!addedBy) { showToast('Enter your name in "Added By"', 'error'); document.getElementById('addedByInput').focus(); return; }
+  if (!code) { showToast('Please enter a MUSE Ticket #', 'error'); document.getElementById('itemCodeInput').focus(); return; }
+  if (!currentPalletId) return;
+
+  const btn = document.getElementById('addItemBtn');
+  btn.disabled = true; btn.textContent = 'Adding...';
+
+  try {
+    const json = await jsonpRequest(scriptUrl, {
+      action: 'addpalletitem',
+      palletid: currentPalletId,
+      itemcode: code,
+      itemdesc: desc,
+      itemqty: qty,
+      itemserial: serial,
+      user: addedBy
+    });
+    if (json.success) {
+      showToast('Item added to pallet', 'success');
+      document.getElementById('itemCodeInput').value = '';
+      document.getElementById('itemDescInput').value = '';
+      document.getElementById('itemQtyInput').value = '1';
+      document.getElementById('itemSerialInput').value = '';
+      document.getElementById('itemCodeInput').focus();
+      await refreshPalletItems();
+      renderModalItems();
+    } else {
+      showToast(json.error || 'Failed to add item', 'error');
+    }
+  } catch(err) { showToast('Error: ' + err.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Add Item';
+}
+
+async function removeItem(row, btnEl) {
+  if (!row) return;
+  btnEl.disabled = true; btnEl.textContent = 'Removing...';
+
+  try {
+    const json = await jsonpRequest(scriptUrl, {
+      action: 'removepalletitem',
+      row: row,
+      user: getUser()
+    });
+    if (json.success) {
+      showToast('Item removed', 'success');
+      await refreshPalletItems();
+      renderModalItems();
+    } else {
+      showToast(json.error || 'Failed to remove item', 'error');
+    }
+  } catch(err) { showToast('Error: ' + err.message, 'error'); }
+  btnEl.disabled = false; btnEl.textContent = 'Remove';
+}
+
+// ===== CLOSE PALLET MODAL =====
+function showCloseModal(palletId) {
+  palletToClose = palletId;
+  document.getElementById('closeModalPalletId').textContent = palletId;
+  document.getElementById('closeModalOverlay').classList.add('show');
+}
+
+function closeCloseModal() {
+  palletToClose = null;
+  document.getElementById('closeModalOverlay').classList.remove('show');
+}
+
+async function confirmClosePallet() {
+  if (!palletToClose) return;
+  const operatorName = getOperatorName();
+  if (!operatorName) return;
+  const btn = document.getElementById('confirmCloseBtn');
+  btn.disabled = true; btn.textContent = 'Closing...';
+
+  try {
+    const json = await jsonpRequest(scriptUrl, {
+      action: 'closepallet',
+      palletid: palletToClose,
+      user: operatorName
+    });
+    if (json.success) {
+      showToast('Pallet ' + palletToClose + ' closed', 'success');
+      closeCloseModal();
+      await refreshPallets();
+    } else {
+      showToast(json.error || 'Failed to close pallet', 'error');
+    }
+  } catch(err) { showToast('Error: ' + err.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Close Pallet';
+}
+
+// ===== LABEL PRINT MODAL =====
+function getHubAddress(name) {
+  if (!name) return '';
+  const n = (name||'').trim().toLowerCase();
+  let hub = hubLocations.find(h => (h['Name']||'').trim().toLowerCase() === n);
+  if (!hub) hub = hubLocations.find(h => (h['Name']||'').toLowerCase().includes(n) || n.includes((h['Name']||'').toLowerCase()));
+  return hub ? (hub['Address']||'') : '';
+}
+
+// Format address for label: street on line 1, city+state on line 2, zip on line 3
+function formatLabelAddress(addr) {
+  if (!addr) return '';
+  // Address format is typically "Street, City, State ZIP"
+  const parts = addr.split(',').map(s => s.trim());
+  if (parts.length >= 3) {
+    // "Street", "City", "State ZIP"
+    const street = parts[0];
+    const city = parts[1];
+    const stateZip = parts.slice(2).join(', ').trim();
+    // Try to separate state and zip
+    const szMatch = stateZip.match(/^([A-Za-z]+)\s+(\d{5}(-\d{4})?)$/);
+    if (szMatch) {
+      return escHtml(street) + '<br>' + escHtml(city) + ', ' + escHtml(szMatch[1]) + '<br>' + escHtml(szMatch[2]);
+    }
+    return escHtml(street) + '<br>' + escHtml(city) + '<br>' + escHtml(stateZip);
+  } else if (parts.length === 2) {
+    // "Street", "City State ZIP"
+    const street = parts[0];
+    const rest = parts[1];
+    const szMatch = rest.match(/^(.+?)\s+([A-Z]{2})\s+(\d{5}(-\d{4})?)$/i);
+    if (szMatch) {
+      return escHtml(street) + '<br>' + escHtml(szMatch[1]) + ', ' + escHtml(szMatch[2]) + '<br>' + escHtml(szMatch[3]);
+    }
+    return escHtml(street) + '<br>' + escHtml(rest);
+  }
+  return escHtml(addr);
+}
+
+function showLabelModal(palletId) {
+  // Find pallet from either open or closed lists
+  let pallet = allOpenPallets.find(p => (p['Pallet ID']||'').trim() === palletId.trim());
+  if (!pallet) pallet = allClosedPallets.find(p => (p['Pallet ID']||'').trim() === palletId.trim());
+  if (!pallet) pallet = allPallets.find(p => (p['Pallet ID']||'').trim() === palletId.trim());
+  if (!pallet) { showToast('Pallet not found', 'error'); return; }
+
+  const status = (pallet['Status']||'').trim();
+  const itemsCount = getItemsCountForPallet(palletId);
+  const now = new Date().toLocaleString('en-US', { timeZone:'America/New_York' });
+  const statusColor = status === 'Open' ? '#fd7e14' : '#28a745';
+  const statusLabel = status === 'Open' ? 'PALLET OPEN' : 'PALLET CLOSED';
+
+  const finalDest = pallet['Final Destination'] || '';
+  // Parse final destination — could be "Name | Address" or just a location name
+  let finalDestName = finalDest;
+  let finalDestAddr = '';
+  if (finalDest.includes('|')) {
+    const parts = finalDest.split('|').map(s => s.trim());
+    finalDestName = parts[0];
+    finalDestAddr = parts[1] || '';
+  } else {
+    finalDestAddr = getHubAddress(finalDest);
+  }
+
+  // Get MUSE tickets for this pallet
+  const museItems = allPalletItems.filter(item =>
+    (item['Pallet ID']||'').trim() === palletId.trim() &&
+    (item['Status']||'').toLowerCase() === 'on pallet'
+  );
+  const museTicketsHtml = museItems.length > 0
+    ? museItems.map(item => escHtml(item['MUSE Ticket']||'')).filter(t => t).join(', ')
+    : '';
+
+  const labelHtml = `
+    <div id="labelPrintArea" style="width:384px;height:576px;margin:20px auto;border:2px solid #333;border-radius:4px;background:white;display:flex;flex-direction:column;font-family:'Segoe UI',Arial,sans-serif;overflow:hidden;">
+      <div style="text-align:center;padding:10px 0;border-bottom:2px solid black;">
+        <img src="https://www.ctdi.com/wp-content/uploads/2020/12/ctdi-flat-logo-white-1024x223.png" style="height:36px;filter:invert(1);">
+      </div>
+      <div style="text-align:center;padding:8px 0;border-bottom:1px solid #ccc;">
+        <div style="font-size:16px;font-weight:bold;text-transform:uppercase;letter-spacing:2px;">FRONTIER SHIPPING</div>
+      </div>
+      <div style="text-align:center;padding:16px 0;border-bottom:1px solid #ccc;">
+        <div style="font-size:36px;font-weight:bold;font-family:Consolas,'Courier New',monospace;">${escHtml(palletId)}</div>
+      </div>
+      <div style="text-align:center;padding:12px 0;border-bottom:1px solid #ccc;">
+        <svg id="labelBarcode"></svg>
+      </div>
+      <div style="text-align:center;padding:8px 0;border-bottom:1px solid #ccc;">
+        <div style="display:inline-block;border:2px solid ${statusColor};color:${statusColor};padding:4px 16px;border-radius:4px;font-weight:bold;font-size:13px;">${statusLabel}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;text-align:center;">
+        <div style="padding:12px 14px;border-right:1px solid #eee;text-align:center;">
+          <div style="font-size:10px;color:#555;text-transform:uppercase;font-weight:600;letter-spacing:0.5px;">Origin</div>
+          <div style="font-size:14px;font-weight:700;margin-top:4px;">${escHtml(pallet['Origin']||'—')}</div>
+          <div style="font-size:11px;color:#444;margin-top:2px;">${formatLabelAddress(getHubAddress(pallet['Origin']))}</div>
+        </div>
+        <div style="padding:12px 14px;text-align:center;">
+          <div style="font-size:10px;color:#555;text-transform:uppercase;font-weight:600;letter-spacing:0.5px;">Final Destination</div>
+          <div style="font-size:14px;font-weight:700;margin-top:4px;">${escHtml(finalDestName||'—')}</div>
+          <div style="font-size:11px;color:#444;margin-top:2px;">${formatLabelAddress(finalDestAddr)}</div>
+        </div>
+      </div>
+      <div style="padding:8px 14px;border-top:1px solid #ccc;text-align:center;">
+        <div style="font-size:10px;color:#555;text-transform:uppercase;font-weight:600;letter-spacing:0.5px;margin-bottom:4px;">MUSE Tickets</div>
+        <div style="font-size:13px;font-weight:600;font-family:Consolas,monospace;line-height:1.6;">${museTicketsHtml || '—'}</div>
+      </div>
+      <div style="text-align:center;padding:6px;font-size:12px;color:#555;border-top:1px solid #eee;">Printed: ${now}</div>
+    </div>
+  `;
+
+  document.getElementById('labelPreview').innerHTML = labelHtml;
+  document.getElementById('labelModalOverlay').classList.add('show');
+
+  setTimeout(() => {
+    try { JsBarcode('#labelBarcode', palletId, { format: 'CODE128', width: 2, height: 50, displayValue: false, margin: 0 }); } catch(e) {}
+  }, 50);
+}
+
+function closeLabelModal() {
+  document.getElementById('labelModalOverlay').classList.remove('show');
+}
+
+function printLabel() {
+  const preview = document.getElementById('labelPrintArea');
+  if (!preview) return;
+  const win = window.open('', '_blank', 'width=420,height=650');
+  win.document.write('<!DOCTYPE html><html><head><title>Pallet Label</title><style>@page{size:4in 6in;margin:0;}@media print{html,body{margin:0;padding:0;width:4in;height:6in;overflow:hidden;}}html,body{margin:0;padding:0;width:4in;height:6in;}*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}</style></head><body>');
+  // Clone and force full size with top padding for printer safe area
+  const clone = preview.cloneNode(true);
+  clone.style.width = '4in';
+  clone.style.height = '5.7in';
+  clone.style.margin = '0';
+  clone.style.marginTop = '0.2in';
+  clone.style.borderRadius = '0';
+  clone.style.border = 'none';
+  win.document.write(clone.outerHTML);
+  win.document.write('</body></html>');
+  win.document.close();
+  setTimeout(() => { win.print(); }, 300);
+}
+
+// ===== DETAILS MODAL (read-only for closed pallets) =====
+function showDetailsModal(palletId) {
+  const pallet = allClosedPallets.find(p => (p['Pallet ID']||'') === palletId);
+  document.getElementById('detailsModalTitle').textContent = palletId;
+  document.getElementById('detailsModalSub').textContent = pallet ? (pallet['Origin']||'') : '';
+  
+  const items = allPalletItems.filter(item =>
+    (item['Pallet ID']||'').toString().trim() === palletId.toString().trim() &&
+    (item['Status']||'').toLowerCase() === 'on pallet'
+  );
+  document.getElementById('detailsItemsCount').textContent = items.length + ' item' + (items.length !== 1 ? 's' : '');
+  
+  // Build pallet info section
+  const originName = pallet ? (pallet['Origin']||'—') : '—';
+  const originAddr = getHubAddress(originName);
+  const finalDest = pallet ? (pallet['Final Destination']||'') : '';
+  let fdName = '— Not set —', fdAddr = '';
+  if (finalDest) {
+    if (finalDest.includes('|')) {
+      fdName = finalDest.split('|')[0].trim();
+      fdAddr = finalDest.split('|')[1] ? finalDest.split('|')[1].trim() : '';
+    } else {
+      fdName = finalDest;
+      fdAddr = getHubAddress(finalDest);
+    }
+  }
+
+  let infoHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">';
+  infoHtml += '<div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;">';
+  infoHtml += '<div style="font-size:10px;color:#888;text-transform:uppercase;font-weight:600;letter-spacing:0.5px;">Origin</div>';
+  infoHtml += '<div style="font-size:14px;font-weight:700;color:#1a3a5c;margin-top:4px;">' + escHtml(originName) + '</div>';
+  infoHtml += '<div style="font-size:11px;color:#555;margin-top:2px;">' + escHtml(originAddr) + '</div>';
+  infoHtml += '</div>';
+  infoHtml += '<div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;">';
+  infoHtml += '<div style="font-size:10px;color:#888;text-transform:uppercase;font-weight:600;letter-spacing:0.5px;">Final Destination</div>';
+  infoHtml += '<div style="font-size:14px;font-weight:700;color:#1a3a5c;margin-top:4px;">' + escHtml(fdName) + '</div>';
+  infoHtml += '<div style="font-size:11px;color:#555;margin-top:2px;">' + escHtml(fdAddr) + '</div>';
+  infoHtml += '</div>';
+  infoHtml += '</div>';
+  infoHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;padding:10px 16px;background:#f8f9fa;border-radius:8px;font-size:13px;">';
+  infoHtml += '<div><span style="color:#888;font-size:11px;text-transform:uppercase;display:block;">Opened</span><strong>' + fmtDate(pallet ? pallet['Open Date']||'' : '') + '</strong></div>';
+  infoHtml += '<div><span style="color:#888;font-size:11px;text-transform:uppercase;display:block;">Closed</span><strong>' + fmtDate(pallet ? pallet['Close Date']||'' : '') + '</strong></div>';
+  infoHtml += '</div>';
+  document.getElementById('detailsInfoSection').innerHTML = infoHtml;
+  
+  const wrap = document.getElementById('detailsItemsTable');
+  if (items.length === 0) {
+    wrap.innerHTML = '<div class="empty-msg">No items on this pallet</div>';
+  } else {
+    let html = '<table><thead><tr><th>#</th><th>MUSE Ticket #</th><th>Description / Note</th><th>Qty</th><th>Serial #</th><th>Date Added</th><th>Added By</th></tr></thead><tbody>';
+    items.forEach((item, i) => {
+      html += '<tr>';
+      html += '<td>' + (i + 1) + '</td>';
+      html += '<td><strong>' + escHtml(item['MUSE Ticket']||'') + '</strong></td>';
+      html += '<td>' + escHtml(item['Description Note']||'—') + '</td>';
+      html += '<td>' + escHtml(item['Item Quantity']||'1') + '</td>';
+      html += '<td>' + escHtml(item['Item Serial Number']||'—') + '</td>';
+      html += '<td>' + fmtDate(item['Date Added']||'') + '</td>';
+      html += '<td>' + escHtml(item['Added By']||'') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  }
+  
+  document.getElementById('detailsModalOverlay').classList.add('show');
+}
+
+function closeDetailsModal() {
+  document.getElementById('detailsModalOverlay').classList.remove('show');
+}
+
+// ===== REOPEN PALLET =====
+let palletToReopen = null;
+
+function showReopenModal(palletId) {
+  palletToReopen = palletId;
+  document.getElementById('reopenModalPalletId').textContent = palletId;
+  document.getElementById('reopenModalOverlay').classList.add('show');
+}
+
+function closeReopenModal() {
+  palletToReopen = null;
+  document.getElementById('reopenModalOverlay').classList.remove('show');
+}
+
+async function confirmReopenPallet() {
+  if (!palletToReopen) return;
+  const operatorName = getOperatorName();
+  if (!operatorName) return;
+  const btn = document.getElementById('confirmReopenBtn');
+  btn.disabled = true; btn.textContent = 'Reopening...';
+
+  try {
+    const json = await jsonpRequest(scriptUrl, {
+      action: 'reopenpallet',
+      palletid: palletToReopen,
+      user: operatorName
+    });
+    if (json.success) {
+      showToast('Pallet ' + palletToReopen + ' reopened', 'success');
+      closeReopenModal();
+      await refreshPallets();
+    } else {
+      showToast(json.error || 'Failed to reopen', 'error');
+    }
+  } catch(err) { showToast('Error: ' + err.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Reopen Pallet';
+}
+
+// ===== DATA LOADING =====
+async function refreshPalletItems() {
+  try {
+    const json = await jsonpRequest(scriptUrl, { action: 'readpalletitems' });
+    if (json.success) { allPalletItems = json.data || []; }
+  } catch(err) { /* silent */ }
+}
+
+async function refreshPallets() {
+  try {
+    const json = await jsonpRequest(scriptUrl, { action: 'read' });
+    if (json.success) {
+      const allData = json.data || [];
+      allPallets = allData;
+      allOpenPallets = allData.filter(p => (p['Status']||'').toLowerCase() === 'open');
+      const closed = allData.filter(p => (p['Status']||'').toLowerCase() === 'closed');
+      closed.sort((a, b) => new Date(b['Close Date']||0) - new Date(a['Close Date']||0));
+      allClosedPallets = closed;
+      renderOpenTable(allOpenPallets);
+      renderClosedTable(allClosedPallets);
+    }
+  } catch(err) { /* silent */ }
+}
+
+async function loadHubs() {
+  try {
+    const json = await jsonpRequest(scriptUrl, { action: 'readhubs' });
+    if (json.success) {
+      const select = document.getElementById('originSelect');
+      (json.data || []).filter(h => (h['Location Type']||'').toLowerCase() === 'hub').forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h['Name'];
+        opt.textContent = h['Location ID'] + ' — ' + h['Name'];
+        select.appendChild(opt);
+      });
+    }
+  } catch(err) { /* silent */ }
+}
+
+async function loadData() {
+  if (!scriptUrl) { setStatus('disconnected', 'No URL — go to Settings'); document.getElementById('loadingMsg').textContent = 'No script URL configured.'; return; }
+  setStatus('pending', 'Loading...');
+  document.getElementById('loadingOverlay').classList.add('show');
+
+  try {
+    const [palletsJson, itemsJson, hubsJson] = await Promise.all([
+      jsonpRequest(scriptUrl, { action: 'read' }),
+      jsonpRequest(scriptUrl, { action: 'readpalletitems' }),
+      jsonpRequest(scriptUrl, { action: 'readhubs' })
+    ]);
+
+    if (palletsJson.success) {
+      setStatus('connected', 'Connected');
+      const allData = palletsJson.data || [];
+      allOpenPallets = allData.filter(p => (p['Status']||'').toLowerCase() === 'open');
+      const closed = allData.filter(p => (p['Status']||'').toLowerCase() === 'closed');
+      closed.sort((a, b) => new Date(b['Close Date']||0) - new Date(a['Close Date']||0));
+      allClosedPallets = closed;
+      allPalletItems = (itemsJson.success ? itemsJson.data : []) || [];
+      renderOpenTable(allOpenPallets);
+      renderClosedTable(allClosedPallets);
+    } else {
+      setStatus('disconnected', 'Error');
+      document.getElementById('palletTableWrap').innerHTML = '<div class="empty-msg">Failed to load pallets.</div>';
+    }
+
+    // Load hubs into dropdown
+    if (hubsJson.success) {
+      hubLocations = hubsJson.data || [];
+      const select = document.getElementById('originSelect');
+      hubLocations.filter(h => (h['Location Type']||'').toLowerCase() === 'hub').forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h['Name'];
+        opt.textContent = h['Name'];
+        select.appendChild(opt);
+      });
+      // Populate final destination dropdown (Final Location types)
+      const finalSelect = document.getElementById('finalDestSelect');
+      hubLocations.filter(h => (h['Location Type']||'').toLowerCase() === 'final location').forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h['Name'];
+        opt.textContent = (h['Location ID']||'') + ' — ' + (h['Name']||'');
+        finalSelect.appendChild(opt);
+      });
+    }
+  } catch(err) {
+    setStatus('disconnected', 'Connection failed');
+    document.getElementById('palletTableWrap').innerHTML = '<div class="empty-msg">Connection error: ' + escHtml(err.message) + '</div>';
+  }
+  document.getElementById('loadingOverlay').classList.remove('show');
+}
+
+// ===== EVENT LISTENERS =====
+document.getElementById('itemCodeInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { e.preventDefault(); addItem(); }
+});
+document.getElementById('addedByInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { e.preventDefault(); document.getElementById('itemCodeInput').focus(); }
+});
+document.getElementById('itemDescInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { e.preventDefault(); addItem(); }
+});
+document.getElementById('itemSerialInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { e.preventDefault(); addItem(); }
+});
+document.getElementById('filterInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') e.preventDefault();
+});
+
+loadData();
+</script>
+</body>
+</html>

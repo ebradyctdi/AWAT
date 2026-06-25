@@ -1,26 +1,20 @@
 // ============================================================
-// GOOGLE APPS SCRIPT — paste this into your Google Sheet
-// Extensions → Apps Script → paste → Deploy → Web App
+// FRONTIER SHIPPING — Google Apps Script
+// Paste into your Google Sheet: Extensions → Apps Script
+// Deploy → New Deployment → Web App → Execute as: Me → Anyone
 // ============================================================
 // SETUP:
-// 1. Open your Google Sheet (must have these tabs):
-//    - "Received Orders" with headers: PO Number | Location | Configuration | Status | Receive Date | Cabinet Start Date | Assembly Complete Date | QC Complete Date | Cabinet Complete Date | Transfer Out Date
-//    - "Transaction History" with headers: PO Number | Timestamp | Application | From Status | To Status | User
-//    - "Material Info" with headers: PO Number | Component | Serial Number | Timestamp
-//    - "QC Notes" with headers: PO Number | Timestamp | Result | Note
-//    - "Infirmary Notes" with headers: PO Number | Timestamp | Note
-//    - "Cabinet Configs" with headers: Configuration | Major Material 1 | Major Material 2 | ... | Major Material 15
-// 2. Go to Extensions → Apps Script
-// 3. Delete any existing code and paste this entire file
-// 4. Deploy → New Deployment → Web App → Execute as: Me → Who has access: Anyone
+// 1. Google Sheet with tabs:
+//    - "Pallets" headers: Pallet ID | Origin | Description | Status | Opened By | Open Date | Closed By | Close Date | Current Location
+//    - "Routes" headers: Pallet ID | Final Destination | Created By | Created Date
+//    - "Route Legs" headers: Pallet ID | Leg # | From Location | To Location | Leg Type | Status | Pickup Scan By | Pickup Scan Date | Dropoff Scan By | Dropoff Scan Date | Receipt Scan By | Receipt Scan Date
+//    - "Transaction History" headers: Pallet ID | Timestamp | Action | Leg # | Location | User
+//    - "Hub Locations" headers: Location ID | Name | Address | Notes
+//    - "Exceptions" headers: Pallet ID | Timestamp | Type | Note | Reported By | Status | Resolved By | Resolution Date
+//    - "Users" headers: Username | Password | Email | Role
 // ============================================================
 
-var RECEIVED_SHEET = 'Received Orders';
-var HISTORY_SHEET = 'Transaction History';
 var TS_FORMAT = 'M/d/yyyy HH:mm:ss';
-// Set this to the ID of the Google Drive folder where photos should be saved
-// To get the ID: open the folder in Google Drive, the URL will be https://drive.google.com/drive/folders/XXXXX — copy the XXXXX part
-var PHOTO_FOLDER_ID = '1vc83o3eEtJvNli3agcd4E5lt4Qpy8aco';
 
 function _respond(obj, callback) {
   var json = JSON.stringify(obj);
@@ -32,18 +26,52 @@ function _respond(obj, callback) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function _ts(now) {
-  return Utilities.formatDate(now, Session.getScriptTimeZone(), TS_FORMAT);
+function _cellToString(val) {
+  if (val === null || val === undefined || val === '') return '';
+  if (val instanceof Date) {
+    // Use the spreadsheet's timezone to match what the user sees in the sheet
+    var tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+    return Utilities.formatDate(val, tz, 'M/d/yyyy H:mm:ss');
+  }
+  return val.toString();
 }
 
-function _findPO(sheet, po) {
+function _ts(now) {
+  return Utilities.formatDate(now, 'America/New_York', TS_FORMAT);
+}
+
+function _findPallet(sheet, palletId) {
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return -1;
-  var poCol = sheet.getRange('A2:A' + lastRow).getValues().flat();
-  for (var i = 0; i < poCol.length; i++) {
-    if (poCol[i].toString().trim() === po) return i;
+  var col = sheet.getRange('A2:A' + lastRow).getValues().flat();
+  for (var i = 0; i < col.length; i++) {
+    if (col[i].toString().trim() === palletId) return i;
   }
   return -1;
+}
+
+function _getNextPalletId(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 'PLB-000001';
+  var ids = sheet.getRange('A2:A' + lastRow).getValues().flat();
+  var max = 0;
+  for (var i = 0; i < ids.length; i++) {
+    var match = ids[i].toString().match(/PLB-(\d+)/);
+    if (match) {
+      var num = parseInt(match[1]);
+      if (num > max) max = num;
+    }
+  }
+  var next = max + 1;
+  return 'PLB-' + ('000000' + next).slice(-6);
+}
+
+function _logTransaction(ss, palletId, action, legNum, location, user) {
+  var histSheet = ss.getSheetByName('Transaction History');
+  if (!histSheet) return;
+  var now = new Date();
+  var ts = _ts(now);
+  histSheet.appendRow([palletId, ts, action, legNum || '', location || '', user || '']);
 }
 
 function doGet(e) {
@@ -53,10 +81,8 @@ function doGet(e) {
 
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var receivedSheet = ss.getSheetByName(RECEIVED_SHEET);
-    var historySheet = ss.getSheetByName(HISTORY_SHEET);
-
-    if (!receivedSheet) return _respond({ success: false, error: 'Sheet "Received Orders" not found' }, callback);
+    var palletSheet = ss.getSheetByName('Pallets');
+    if (!palletSheet) return _respond({ success: false, error: 'Sheet "Pallets" not found' }, callback);
 
     // ---- LOGIN ----
     if (action === 'login') {
@@ -65,30 +91,504 @@ function doGet(e) {
       var username = (e.parameter.username || '').toString().trim();
       var password = (e.parameter.password || '').toString().trim();
       if (!username || !password) return _respond({ success: false, error: 'Username and password are required' }, callback);
-
       var data = usersSheet.getDataRange().getValues();
       for (var i = 1; i < data.length; i++) {
         var u = (data[i][0] || '').toString().trim();
         var p = (data[i][1] || '').toString().trim();
-        var role = (data[i][3] || '').toString().trim(); // Column D = Role (after Email in C)
+        var role = (data[i][3] || '').toString().trim();
         if (u.toLowerCase() === username.toLowerCase() && p === password) {
-          return _respond({ success: true, username: u, role: role || 'Tech' }, callback);
+          return _respond({ success: true, username: u, role: role || 'Operator' }, callback);
         }
       }
       return _respond({ success: false, error: 'Invalid username or password' }, callback);
     }
 
-    // ---- LIST USERS (usernames only, no passwords) ----
-    if (action === 'listusers') {
-      var usersSheet = ss.getSheetByName('Users');
-      if (!usersSheet) return _respond({ success: false, error: 'Sheet "Users" not found' }, callback);
-      var data = usersSheet.getDataRange().getValues();
-      var users = [];
-      for (var i = 1; i < data.length; i++) {
-        var u = (data[i][0] || '').toString().trim();
-        if (u) users.push(u);
+    // ---- READ ALL PALLETS ----
+    if (action === 'read') {
+      var lastRow = palletSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: true, data: [] }, callback);
+      var data = palletSheet.getRange(2, 1, lastRow - 1, 10).getValues();
+      var headers = ['Pallet ID', 'Origin', 'Description', 'Status', 'Opened By', 'Open Date', 'Closed By', 'Close Date', 'Current Location', 'Final Destination'];
+      var rows = data.map(function(row) {
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = _cellToString(row[i]); });
+        return obj;
+      });
+      return _respond({ success: true, data: rows }, callback);
+    }
+
+    // ---- CREATE PALLET ----
+    if (action === 'createpallet') {
+      var origin = (e.parameter.origin || '').toString().trim();
+      var description = (e.parameter.description || '').toString().trim();
+      var finalDest = (e.parameter.finaldest || '').toString().trim();
+      if (!origin) return _respond({ success: false, error: 'Origin is required' }, callback);
+
+      var palletId = _getNextPalletId(palletSheet);
+      var now = new Date();
+      var ts = _ts(now);
+      palletSheet.appendRow([palletId, origin, description, 'Open', user, ts, '', '', origin, finalDest]);
+      _logTransaction(ss, palletId, 'Pallet Created', '', origin, user);
+      return _respond({ success: true, palletId: palletId, openDate: ts }, callback);
+    }
+
+    // ---- CLOSE PALLET ----
+    if (action === 'closepallet') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+
+      var idx = _findPallet(palletSheet, palletId);
+      if (idx === -1) return _respond({ success: false, error: 'Pallet ' + palletId + ' not found' }, callback);
+
+      var row = idx + 2;
+      var status = palletSheet.getRange(row, 4).getValue().toString().trim();
+      if (status !== 'Open') {
+        return _respond({ success: false, error: 'Pallet is "' + status + '", expected "Open"' }, callback);
       }
-      return _respond({ success: true, users: users }, callback);
+
+      var now = new Date();
+      var ts = _ts(now);
+      palletSheet.getRange(row, 4).setValue('Closed');
+      palletSheet.getRange(row, 7).setValue(user);
+      palletSheet.getRange(row, 8).setValue(ts);
+      _logTransaction(ss, palletId, 'Pallet Closed', '', '', user);
+      return _respond({ success: true, palletId: palletId, closeDate: ts }, callback);
+    }
+
+    // ---- READ HUB LOCATIONS ----
+    if (action === 'readhubs') {
+      var hubSheet = ss.getSheetByName('Hub Locations');
+      if (!hubSheet) return _respond({ success: true, data: [] }, callback);
+      var lastRow = hubSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: true, data: [] }, callback);
+      var data = hubSheet.getRange(2, 1, lastRow - 1, 5).getValues();
+      var headers = ['Location ID', 'Name', 'Address', 'Location Type', 'Notes'];
+      var rows = data.map(function(row) {
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = _cellToString(row[i]); });
+        return obj;
+      });
+      return _respond({ success: true, data: rows }, callback);
+    }
+
+    // ---- ADD HUB LOCATION ----
+    if (action === 'addhub') {
+      var hubSheet = ss.getSheetByName('Hub Locations');
+      if (!hubSheet) return _respond({ success: false, error: 'Sheet "Hub Locations" not found' }, callback);
+      var locId = (e.parameter.locationid || '').toString().trim();
+      var name = (e.parameter.name || '').toString().trim();
+      var address = (e.parameter.address || '').toString().trim();
+      var locType = (e.parameter.locationtype || 'Hub').toString().trim();
+      var notes = (e.parameter.notes || '').toString().trim();
+      if (!locId || !name) return _respond({ success: false, error: 'Location ID and Name are required' }, callback);
+
+      // Duplicate check
+      var lastRow = hubSheet.getLastRow();
+      if (lastRow >= 2) {
+        var ids = hubSheet.getRange('A2:A' + lastRow).getValues().flat();
+        for (var i = 0; i < ids.length; i++) {
+          if (ids[i].toString().trim().toUpperCase() === locId.toUpperCase()) {
+            return _respond({ success: false, error: 'Location ID "' + locId + '" already exists' }, callback);
+          }
+        }
+      }
+      hubSheet.appendRow([locId, name, address, locType, notes]);
+      return _respond({ success: true, locationId: locId }, callback);
+    }
+
+    // ---- UPDATE HUB LOCATION ----
+    if (action === 'updatehub') {
+      var hubSheet = ss.getSheetByName('Hub Locations');
+      if (!hubSheet) return _respond({ success: false, error: 'Sheet "Hub Locations" not found' }, callback);
+      var row = parseInt(e.parameter.row);
+      if (isNaN(row)) return _respond({ success: false, error: 'Row required' }, callback);
+      var sheetRow = row + 2;
+      var name = (e.parameter.name || '').toString().trim();
+      var address = (e.parameter.address || '').toString().trim();
+      var locType = (e.parameter.locationtype || '').toString().trim();
+      var notes = (e.parameter.notes || '').toString().trim();
+      if (!name) return _respond({ success: false, error: 'Name is required' }, callback);
+      hubSheet.getRange(sheetRow, 2).setValue(name);
+      hubSheet.getRange(sheetRow, 3).setValue(address);
+      if (locType) hubSheet.getRange(sheetRow, 4).setValue(locType);
+      hubSheet.getRange(sheetRow, 5).setValue(notes);
+      return _respond({ success: true }, callback);
+    }
+
+    // ---- ASSIGN ROUTE ----
+    if (action === 'assignroute') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      var finalDest = (e.parameter.finaldest || '').toString().trim();
+      var legsJson = (e.parameter.legs || '[]').toString();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+      if (!finalDest) return _respond({ success: false, error: 'Final Destination is required' }, callback);
+
+      var idx = _findPallet(palletSheet, palletId);
+      if (idx === -1) return _respond({ success: false, error: 'Pallet ' + palletId + ' not found' }, callback);
+
+      var legs = JSON.parse(legsJson);
+      if (!legs.length) return _respond({ success: false, error: 'At least one leg is required' }, callback);
+
+      // Save route
+      var routeSheet = ss.getSheetByName('Routes');
+      if (!routeSheet) return _respond({ success: false, error: 'Sheet "Routes" not found' }, callback);
+      var now = new Date();
+      var ts = _ts(now);
+      routeSheet.appendRow([palletId, finalDest, user, ts]);
+
+      // Save legs
+      var legSheet = ss.getSheetByName('Route Legs');
+      if (!legSheet) return _respond({ success: false, error: 'Sheet "Route Legs" not found' }, callback);
+      for (var i = 0; i < legs.length; i++) {
+        var leg = legs[i];
+        var trackingNum = 'TRK-' + palletId.replace('-', '') + '-L' + (i + 1);
+        legSheet.appendRow([trackingNum, palletId, i + 1, leg.from, leg.to, leg.type, 'Pending', '', '', '', '', '', '']);
+      }
+
+      _logTransaction(ss, palletId, 'Route Assigned', '', '', user);
+      return _respond({ success: true, palletId: palletId, legs: legs.length }, callback);
+    }
+
+    // ---- READ ROUTES ----
+    if (action === 'readroutes') {
+      var routeSheet = ss.getSheetByName('Routes');
+      if (!routeSheet) return _respond({ success: true, data: [] }, callback);
+      var lastRow = routeSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: true, data: [] }, callback);
+      var data = routeSheet.getRange(2, 1, lastRow - 1, 4).getValues();
+      var headers = ['Pallet ID', 'Final Destination', 'Created By', 'Created Date'];
+      var rows = data.map(function(row) {
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = _cellToString(row[i]); });
+        return obj;
+      });
+      return _respond({ success: true, data: rows }, callback);
+    }
+
+    // ---- READ ROUTE LEGS ----
+    if (action === 'readlegs') {
+      var legSheet = ss.getSheetByName('Route Legs');
+      if (!legSheet) return _respond({ success: true, data: [] }, callback);
+      var lastRow = legSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: true, data: [] }, callback);
+      var data = legSheet.getRange(2, 1, lastRow - 1, 14).getValues();
+      var headers = ['Tracking Number', 'Pallet ID', 'Leg #', 'From Location', 'To Location', 'Leg Type', 'Status', 'Pickup Scan By', 'Pickup Scan Date', 'Dropoff Scan By', 'Dropoff Scan Date', 'Receipt Scan By', 'Receipt Scan Date', 'Extra'];
+      var rows = data.map(function(row) {
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = _cellToString(row[i]); });
+        return obj;
+      });
+      return _respond({ success: true, data: rows }, callback);
+    }
+
+    // ---- PICKUP SCAN ----
+    if (action === 'pickupscan') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+
+      var legSheet = ss.getSheetByName('Route Legs');
+      if (!legSheet) return _respond({ success: false, error: 'Sheet "Route Legs" not found' }, callback);
+
+      // Find the next pending leg for this pallet
+      var lastRow = legSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: false, error: 'No route legs found' }, callback);
+      var data = legSheet.getRange(2, 1, lastRow - 1, 14).getValues();
+      var targetRow = -1;
+      var legNum = '';
+      var fromLocation = '';
+      for (var i = 0; i < data.length; i++) {
+        if (data[i][1].toString().trim() === palletId && data[i][6].toString().trim() === 'Pending') {
+          targetRow = i + 2;
+          legNum = data[i][2].toString();
+          fromLocation = data[i][3].toString().trim();
+          break;
+        }
+      }
+      if (targetRow === -1) return _respond({ success: false, error: 'No pending leg found for ' + palletId }, callback);
+
+      var now = new Date();
+      var ts = _ts(now);
+      legSheet.getRange(targetRow, 7).setValue('In Transit');
+      legSheet.getRange(targetRow, 8).setValue(user);
+      legSheet.getRange(targetRow, 9).setValue(ts);
+
+      // Update pallet status and current location
+      var palletIdx = _findPallet(palletSheet, palletId);
+      if (palletIdx >= 0) {
+        palletSheet.getRange(palletIdx + 2, 4).setValue('In Transit');
+      }
+
+      _logTransaction(ss, palletId, 'Pickup Scan', legNum, fromLocation, user);
+      return _respond({ success: true, palletId: palletId, leg: legNum, pickupDate: ts }, callback);
+    }
+
+    // ---- DROPOFF SCAN ----
+    if (action === 'dropoffscan') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+
+      var legSheet = ss.getSheetByName('Route Legs');
+      if (!legSheet) return _respond({ success: false, error: 'Sheet "Route Legs" not found' }, callback);
+
+      var lastRow = legSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: false, error: 'No route legs found' }, callback);
+      var data = legSheet.getRange(2, 1, lastRow - 1, 14).getValues();
+      var targetRow = -1;
+      var legNum = '';
+      var legType = '';
+      var toLocation = '';
+      for (var i = 0; i < data.length; i++) {
+        if (data[i][1].toString().trim() === palletId && data[i][6].toString().trim() === 'In Transit') {
+          targetRow = i + 2;
+          legNum = data[i][2].toString();
+          legType = data[i][5].toString().trim();
+          toLocation = data[i][4].toString().trim();
+          break;
+        }
+      }
+      if (targetRow === -1) return _respond({ success: false, error: 'No in-transit leg found for ' + palletId }, callback);
+
+      var now = new Date();
+      var ts = _ts(now);
+      legSheet.getRange(targetRow, 10).setValue(user);
+      legSheet.getRange(targetRow, 11).setValue(ts);
+
+      // If Final leg, mark complete and pallet as Delivered
+      if (legType === 'Final') {
+        legSheet.getRange(targetRow, 7).setValue('Complete');
+        var palletIdx = _findPallet(palletSheet, palletId);
+        if (palletIdx >= 0) {
+          palletSheet.getRange(palletIdx + 2, 4).setValue('Delivered');
+          palletSheet.getRange(palletIdx + 2, 9).setValue(toLocation);
+        }
+        _logTransaction(ss, palletId, 'Dropoff Scan', legNum, toLocation, user);
+        _logTransaction(ss, palletId, 'Delivered', legNum, toLocation, user);
+      } else {
+        legSheet.getRange(targetRow, 7).setValue('Dropped Off');
+        var palletIdx = _findPallet(palletSheet, palletId);
+        if (palletIdx >= 0) {
+          palletSheet.getRange(palletIdx + 2, 9).setValue(toLocation);
+        }
+        _logTransaction(ss, palletId, 'Dropoff Scan', legNum, toLocation, user);
+      }
+
+      return _respond({ success: true, palletId: palletId, leg: legNum, legType: legType, dropoffDate: ts }, callback);
+    }
+
+    // ---- RECEIPT SCAN ----
+    if (action === 'receiptscan') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+
+      var legSheet = ss.getSheetByName('Route Legs');
+      if (!legSheet) return _respond({ success: false, error: 'Sheet "Route Legs" not found' }, callback);
+
+      var lastRow = legSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: false, error: 'No route legs found' }, callback);
+      var data = legSheet.getRange(2, 1, lastRow - 1, 14).getValues();
+      var targetRow = -1;
+      var legNum = '';
+      var toLocation = '';
+      for (var i = 0; i < data.length; i++) {
+        if (data[i][1].toString().trim() === palletId && data[i][6].toString().trim() === 'Dropped Off') {
+          targetRow = i + 2;
+          legNum = data[i][2].toString();
+          toLocation = data[i][4].toString().trim();
+          break;
+        }
+      }
+      if (targetRow === -1) return _respond({ success: false, error: 'No dropped-off leg found for ' + palletId }, callback);
+
+      var now = new Date();
+      var ts = _ts(now);
+      legSheet.getRange(targetRow, 7).setValue('Complete');
+      legSheet.getRange(targetRow, 12).setValue(user);
+      legSheet.getRange(targetRow, 13).setValue(ts);
+
+      // Update pallet status to At Hub
+      var palletIdx = _findPallet(palletSheet, palletId);
+      if (palletIdx >= 0) {
+        palletSheet.getRange(palletIdx + 2, 4).setValue('At Hub');
+        palletSheet.getRange(palletIdx + 2, 9).setValue(toLocation);
+      }
+
+      _logTransaction(ss, palletId, 'Receipt Scan', legNum, toLocation, user);
+      return _respond({ success: true, palletId: palletId, leg: legNum, receiptDate: ts }, callback);
+    }
+
+    // ---- REPORT EXCEPTION ----
+    if (action === 'reportexception') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      var type = (e.parameter.type || '').toString().trim();
+      var note = (e.parameter.note || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+      if (!type) return _respond({ success: false, error: 'Exception type is required' }, callback);
+      if (!note) return _respond({ success: false, error: 'Note is required' }, callback);
+
+      var excSheet = ss.getSheetByName('Exceptions');
+      if (!excSheet) return _respond({ success: false, error: 'Sheet "Exceptions" not found' }, callback);
+
+      var now = new Date();
+      var ts = _ts(now);
+      excSheet.appendRow([palletId, ts, type, note, user, 'Open', '', '']);
+
+      // Put pallet on hold
+      var palletIdx = _findPallet(palletSheet, palletId);
+      if (palletIdx >= 0) {
+        palletSheet.getRange(palletIdx + 2, 4).setValue('On Hold');
+      }
+
+      _logTransaction(ss, palletId, 'Exception Reported', '', '', user);
+      return _respond({ success: true, palletId: palletId }, callback);
+    }
+
+    // ---- READ EXCEPTIONS ----
+    if (action === 'readexceptions') {
+      var excSheet = ss.getSheetByName('Exceptions');
+      if (!excSheet) return _respond({ success: true, data: [] }, callback);
+      var lastRow = excSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: true, data: [] }, callback);
+      var data = excSheet.getRange(2, 1, lastRow - 1, 8).getValues();
+      var headers = ['Pallet ID', 'Timestamp', 'Type', 'Note', 'Reported By', 'Status', 'Resolved By', 'Resolution Date'];
+      var rows = data.map(function(row) {
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = _cellToString(row[i]); });
+        return obj;
+      });
+      return _respond({ success: true, data: rows }, callback);
+    }
+
+    // ---- RESOLVE EXCEPTION ----
+    if (action === 'resolveexception') {
+      var excSheet = ss.getSheetByName('Exceptions');
+      if (!excSheet) return _respond({ success: false, error: 'Sheet "Exceptions" not found' }, callback);
+      var row = parseInt(e.parameter.row);
+      if (isNaN(row)) return _respond({ success: false, error: 'Row required' }, callback);
+      var sheetRow = row + 2;
+      var now = new Date();
+      var ts = _ts(now);
+      excSheet.getRange(sheetRow, 6).setValue('Resolved');
+      excSheet.getRange(sheetRow, 7).setValue(user);
+      excSheet.getRange(sheetRow, 8).setValue(ts);
+
+      // Release hold on pallet - set back to previous logical status
+      var palletId = excSheet.getRange(sheetRow, 1).getValue().toString().trim();
+      var palletIdx = _findPallet(palletSheet, palletId);
+      if (palletIdx >= 0) {
+        // Determine correct status from route legs
+        var legSheet = ss.getSheetByName('Route Legs');
+        var newStatus = 'Closed';
+        if (legSheet && legSheet.getLastRow() >= 2) {
+          var legData = legSheet.getRange(2, 1, legSheet.getLastRow() - 1, 7).getValues();
+          for (var i = legData.length - 1; i >= 0; i--) {
+            if (legData[i][1].toString().trim() === palletId) {
+              var legStatus = legData[i][6].toString().trim();
+              if (legStatus === 'In Transit') { newStatus = 'In Transit'; break; }
+              if (legStatus === 'Dropped Off') { newStatus = 'At Hub'; break; }
+              if (legStatus === 'Complete') { newStatus = 'At Hub'; break; }
+              if (legStatus === 'Pending') { newStatus = 'Closed'; break; }
+            }
+          }
+        }
+        palletSheet.getRange(palletIdx + 2, 4).setValue(newStatus);
+      }
+
+      _logTransaction(ss, palletId, 'Hold Released', '', '', user);
+      return _respond({ success: true, palletId: palletId }, callback);
+    }
+
+    // ---- REMOVE ROUTING ----
+    if (action === 'removerouting') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+
+      // Delete from Routes tab
+      var routeSheet = ss.getSheetByName('Routes');
+      if (routeSheet && routeSheet.getLastRow() >= 2) {
+        var routeData = routeSheet.getRange(2, 1, routeSheet.getLastRow() - 1, 1).getValues().flat();
+        for (var i = routeData.length - 1; i >= 0; i--) {
+          if (routeData[i].toString().trim() === palletId) {
+            routeSheet.deleteRow(i + 2);
+          }
+        }
+      }
+
+      // Delete from Route Legs tab
+      var legSheet = ss.getSheetByName('Route Legs');
+      if (legSheet && legSheet.getLastRow() >= 2) {
+        var legData = legSheet.getRange(2, 2, legSheet.getLastRow() - 1, 1).getValues().flat();
+        for (var i = legData.length - 1; i >= 0; i--) {
+          if (legData[i].toString().trim() === palletId) {
+            legSheet.deleteRow(i + 2);
+          }
+        }
+      }
+
+      _logTransaction(ss, palletId, 'Route Removed', '', '', user);
+      return _respond({ success: true, palletId: palletId }, callback);
+    }
+
+    // ---- UPDATE PALLET ORIGIN ----
+    if (action === 'updatepalletorigin') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      var origin = (e.parameter.origin || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+      if (!origin) return _respond({ success: false, error: 'Origin is required' }, callback);
+      var idx = _findPallet(palletSheet, palletId);
+      if (idx === -1) return _respond({ success: false, error: 'Pallet not found' }, callback);
+      var row = idx + 2;
+      palletSheet.getRange(row, 2).setValue(origin);
+      palletSheet.getRange(row, 9).setValue(origin); // Update Current Location too
+      return _respond({ success: true }, callback);
+    }
+
+    // ---- UPDATE PALLET FINAL DESTINATION ----
+    if (action === 'updatepalletfinaldest') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      var finalDest = (e.parameter.finaldest || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+      var idx = _findPallet(palletSheet, palletId);
+      if (idx === -1) return _respond({ success: false, error: 'Pallet not found' }, callback);
+      var row = idx + 2;
+      palletSheet.getRange(row, 10).setValue(finalDest);
+      return _respond({ success: true }, callback);
+    }
+
+    // ---- TRANSACTION HISTORY ----
+    if (action === 'readhistory') {
+      var histSheet = ss.getSheetByName('Transaction History');
+      if (!histSheet) return _respond({ success: true, data: [] }, callback);
+      var lastRow = histSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: true, data: [] }, callback);
+      var data = histSheet.getRange(2, 1, lastRow - 1, 6).getValues();
+      var headers = ['Pallet ID', 'Timestamp', 'Action', 'Leg #', 'Location', 'User'];
+      var rows = data.map(function(row) {
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = _cellToString(row[i]); });
+        return obj;
+      });
+      return _respond({ success: true, data: rows }, callback);
+    }
+
+    // ---- PALLET HISTORY (single pallet) ----
+    if (action === 'pallethistory') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+      var histSheet = ss.getSheetByName('Transaction History');
+      if (!histSheet) return _respond({ success: true, data: [] }, callback);
+      var lastRow = histSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: true, data: [] }, callback);
+      var data = histSheet.getRange(2, 1, lastRow - 1, 6).getValues();
+      var headers = ['Pallet ID', 'Timestamp', 'Action', 'Leg #', 'Location', 'User'];
+      var rows = [];
+      for (var i = 0; i < data.length; i++) {
+        if (data[i][0].toString().trim() === palletId) {
+          var obj = {};
+          headers.forEach(function(h, j) { obj[h] = data[i][j] ? data[i][j].toString() : ''; });
+          rows.push(obj);
+        }
+      }
+      return _respond({ success: true, data: rows }, callback);
     }
 
     // ---- CREATE USER ----
@@ -98,937 +598,202 @@ function doGet(e) {
       var username = (e.parameter.username || '').toString().trim();
       var password = (e.parameter.password || '').toString().trim();
       var email = (e.parameter.email || '').toString().trim();
-      if (!username) return _respond({ success: false, error: 'Name is required' }, callback);
+      var role = (e.parameter.role || 'Operator').toString().trim();
+      if (!username) return _respond({ success: false, error: 'Username is required' }, callback);
       if (!password) return _respond({ success: false, error: 'Password is required' }, callback);
-      if (!email) return _respond({ success: false, error: 'Email is required' }, callback);
 
-      // Check for duplicate username
       var data = usersSheet.getDataRange().getValues();
       for (var i = 1; i < data.length; i++) {
         if ((data[i][0] || '').toString().trim().toLowerCase() === username.toLowerCase()) {
-          return _respond({ success: false, error: 'Username "' + username + '" already exists' }, callback);
+          return _respond({ success: false, error: 'Username already exists' }, callback);
         }
       }
-
-      usersSheet.appendRow([username, password, email, 'Tech']);
+      usersSheet.appendRow([username, password, email, role]);
       return _respond({ success: true, username: username }, callback);
     }
 
-    // ---- RECEIVE ----
-    if (action === 'receive') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      var config = (e.parameter.config || '').toString().trim();
-      var loc = (e.parameter.location || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
+    // ---- REOPEN PALLET ----
+    if (action === 'reopenpallet') {
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
 
-      if (_findPO(receivedSheet, po) >= 0) {
-        return _respond({ success: false, error: 'DUPLICATE', message: 'PO#' + po + ' has already been received' }, callback);
-      }
-
-      var now = new Date();
-      var ts = _ts(now);
-      receivedSheet.appendRow([po, loc, config, 'Received, Awaiting Start', ts, '', '', '', '', '']);
-      historySheet.appendRow([po, ts, 'Receive APP', '-', 'Received, Awaiting Start', user]);
-      return _respond({ success: true, po: po, receiveDate: ts }, callback);
-    }
-
-    // ---- START BUILD ----
-    if (action === 'startbuild') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-
-      var idx = _findPO(receivedSheet, po);
-      if (idx === -1) return _respond({ success: false, error: 'PO#' + po + ' not found' }, callback);
+      var idx = _findPallet(palletSheet, palletId);
+      if (idx === -1) return _respond({ success: false, error: 'Pallet ' + palletId + ' not found' }, callback);
 
       var row = idx + 2;
-      var status = receivedSheet.getRange(row, 4).getValue().toString().trim();
-      if (status !== 'Received, Awaiting Start') {
-        return _respond({ success: false, error: 'PO#' + po + ' status is "' + status + '", expected "Received, Awaiting Start"' }, callback);
+      var status = palletSheet.getRange(row, 4).getValue().toString().trim();
+      if (status !== 'Closed') {
+        return _respond({ success: false, error: 'Pallet is "' + status + '", expected "Closed"' }, callback);
       }
 
-      var now = new Date();
-      var ts = _ts(now);
-      receivedSheet.getRange(row, 4).setValue('In Assembly');
-      receivedSheet.getRange(row, 6).setValue(ts);
-      historySheet.appendRow([po, ts, 'Start Build APP', 'Received, Awaiting Start', 'In Assembly', user]);
-      return _respond({ success: true, po: po, startDate: ts }, callback);
+      palletSheet.getRange(row, 4).setValue('Open');
+      palletSheet.getRange(row, 7).setValue(''); // Clear Closed By
+      palletSheet.getRange(row, 8).setValue(''); // Clear Close Date
+      _logTransaction(ss, palletId, 'Reopened', '', '', user);
+      return _respond({ success: true, palletId: palletId }, callback);
     }
 
-    // ---- BUILD COMPLETE ----
-    if (action === 'buildcomplete') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-
-      var idx = _findPO(receivedSheet, po);
-      if (idx === -1) return _respond({ success: false, error: 'PO#' + po + ' not found' }, callback);
-
-      var row = idx + 2;
-      var status = receivedSheet.getRange(row, 4).getValue().toString().trim();
-      if (status !== 'In Assembly') {
-        return _respond({ success: false, error: 'PO#' + po + ' status is "' + status + '", expected "In Assembly"' }, callback);
-      }
-
-      // Check material info completeness
-      var config = receivedSheet.getRange(row, 3).getValue().toString().trim(); // Column C = Configuration
-      if (config) {
-        var cfgSheet = ss.getSheetByName('Cabinet Configs');
-        if (cfgSheet) {
-          var cfgData = cfgSheet.getDataRange().getValues();
-          var cfgHeaders = cfgData[0];
-          var requiredMats = [];
-          for (var ci = 1; ci < cfgData.length; ci++) {
-            if (cfgData[ci][0].toString().trim() === config) {
-              for (var mi = 1; mi <= 15; mi++) {
-                var matName = (cfgData[ci][mi] || '').toString().trim();
-                if (matName && matName !== '-') requiredMats.push(matName);
-              }
-              break;
-            }
-          }
-
-          if (requiredMats.length > 0) {
-            var matSheet = ss.getSheetByName('Material Info');
-            var recordedComponents = [];
-            if (matSheet && matSheet.getLastRow() > 1) {
-              var matData = matSheet.getDataRange().getValues();
-              for (var mi = 1; mi < matData.length; mi++) {
-                if (matData[mi][0].toString().trim() === po) {
-                  recordedComponents.push(matData[mi][1].toString().trim());
-                }
-              }
-            }
-
-            var missing = [];
-            for (var ri = 0; ri < requiredMats.length; ri++) {
-              if (recordedComponents.indexOf(requiredMats[ri]) === -1) {
-                missing.push(requiredMats[ri]);
-              }
-            }
-
-            if (missing.length > 0) {
-              return _respond({
-                success: false,
-                error: 'MISSING_MATERIALS',
-                message: 'Material info required for: ' + missing.join(', '),
-                missing: missing
-              }, callback);
-            }
-          }
-        }
-      }
-
-      var now = new Date();
-      var ts = _ts(now);
-      receivedSheet.getRange(row, 4).setValue('Awaiting Testing');
-      receivedSheet.getRange(row, 7).setValue(ts);
-      historySheet.appendRow([po, ts, 'Assembly Complete APP', 'In Assembly', 'Awaiting Testing', user]);
-      return _respond({ success: true, po: po, completeDate: ts }, callback);
-    }
-
-    // ---- TEST RESULT (move from Awaiting Testing to Awaiting QC) ----
-    if (action === 'testresult') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-
-      var idx = _findPO(receivedSheet, po);
-      if (idx === -1) return _respond({ success: false, error: 'PO#' + po + ' not found' }, callback);
-
-      var row = idx + 2;
-      var status = receivedSheet.getRange(row, 4).getValue().toString().trim();
-      if (status !== 'Awaiting Testing') {
-        return _respond({ success: false, error: 'PO#' + po + ' status is "' + status + '", expected "Awaiting Testing"' }, callback);
-      }
-
-      var now = new Date();
-      var ts = _ts(now);
-      receivedSheet.getRange(row, 4).setValue('Awaiting QC');
-      receivedSheet.getRange(row, 8).setValue(ts); // Test Results Date = col H
-      historySheet.appendRow([po, ts, 'Test Results APP', 'Awaiting Testing', 'Awaiting QC', user]);
-      return _respond({ success: true, po: po, testDate: ts }, callback);
-    }
-
-    // ---- QC PASS ----
-    if (action === 'qcpass') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-
-      var idx = _findPO(receivedSheet, po);
-      if (idx === -1) return _respond({ success: false, error: 'PO#' + po + ' not found' }, callback);
-
-      var row = idx + 2;
-      var status = receivedSheet.getRange(row, 4).getValue().toString().trim();
-      if (status !== 'Awaiting QC') {
-        return _respond({ success: false, error: 'PO#' + po + ' status is "' + status + '", expected "Awaiting QC"' }, callback);
-      }
-
-      var now = new Date();
-      var ts = _ts(now);
-      receivedSheet.getRange(row, 4).setValue('QC Passed');
-      receivedSheet.getRange(row, 9).setValue(ts); // QC Result Date = col I
-      historySheet.appendRow([po, ts, 'QC Result APP', 'Awaiting QC', 'QC Passed', user]);
-      return _respond({ success: true, po: po, qcDate: ts }, callback);
-    }
-
-    // ---- QC FAIL → IN INFIRMARY ----
-    if (action === 'qcfail') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      var note = (e.parameter.note || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-
-      var idx = _findPO(receivedSheet, po);
-      if (idx === -1) return _respond({ success: false, error: 'PO#' + po + ' not found' }, callback);
-
-      var row = idx + 2;
-      var status = receivedSheet.getRange(row, 4).getValue().toString().trim();
-      if (status !== 'Awaiting QC') {
-        return _respond({ success: false, error: 'PO#' + po + ' status is "' + status + '", expected "Awaiting QC"' }, callback);
-      }
-
-      var now = new Date();
-      var ts = _ts(now);
-      receivedSheet.getRange(row, 4).setValue('In Infirmary');
-      receivedSheet.getRange(row, 9).setValue(ts); // QC Result Date = col I
-      historySheet.appendRow([po, ts, 'QC Result APP', 'Awaiting QC', 'In Infirmary', user]);
-
-      // Write to Infirmary Notes
-      var infNotesSheet = ss.getSheetByName('Infirmary Notes');
-      if (infNotesSheet && note) {
-        infNotesSheet.appendRow([po, ts, 'QC Fail: ' + note]);
-      }
-
-      return _respond({ success: true, po: po, qcDate: ts }, callback);
-    }
-
-    // ---- MATERIAL SEARCH (by PO or serial number) ----
-    if (action === 'materialsearch') {
-      var matSheet = ss.getSheetByName('Material Info');
-      if (!matSheet) return _respond({ success: false, error: 'Sheet "Material Info" not found' }, callback);
-
-      var query = (e.parameter.query || '').toString().trim();
-      if (!query) return _respond({ success: false, error: 'Search query is required' }, callback);
-      var searchType = (e.parameter.searchType || '').toString().trim(); // 'po' or 'serial'
-
-      var data = matSheet.getDataRange().getValues();
-      if (data.length <= 1) return _respond({ success: true, data: [], query: query }, callback);
-
-      var headers = data[0];
+    // ---- READ PALLET ITEMS ----
+    if (action === 'readpalletitems') {
+      var piSheet = ss.getSheetByName('Pallet Build Info');
+      if (!piSheet) return _respond({ success: true, data: [] }, callback);
+      var lastRow = piSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: true, data: [] }, callback);
+      var data = piSheet.getRange(2, 1, lastRow - 1, 11).getValues();
+      var headers = ['Record Number', 'Pallet ID', 'MUSE Ticket', 'Description Note', 'Item Quantity', 'Item Serial Number', 'Date Added', 'Added By', 'Date Removed', 'Removed By', 'Status'];
+      var palletFilter = (e.parameter.palletid || '').toString().trim();
       var rows = [];
-      for (var i = 1; i < data.length; i++) {
-        var po = data[i][0].toString().trim();
-        var component = data[i][1].toString().trim();
-        var serial = data[i][2].toString().trim();
-        var match = false;
-        if (searchType === 'po') {
-          match = (po !== '' && po === query);
-        } else if (searchType === 'serial') {
-          match = (serial !== '' && serial.indexOf(query) >= 0);
-        } else {
-          match = (po !== '' && po.indexOf(query) >= 0) || (serial !== '' && serial.indexOf(query) >= 0);
-        }
-        if (match) {
-          var row = {};
-          headers.forEach(function(h, j) { row[h] = data[i][j]; });
-          rows.push(row);
-        }
+      for (var i = 0; i < data.length; i++) {
+        var row = {};
+        headers.forEach(function(h, j) { row[h] = _cellToString(data[i][j]); });
+        row['_row'] = i; // 0-based index for updates
+        if (!palletFilter || row['Pallet ID'] === palletFilter) rows.push(row);
       }
-
-      // Also get PO details from Received Orders for matched POs
-      var poDetails = {};
-      if (rows.length > 0) {
-        var roData = receivedSheet.getDataRange().getValues();
-        var roHeaders = roData[0];
-        for (var i = 1; i < roData.length; i++) {
-          var roPO = roData[i][0].toString().trim();
-          for (var j = 0; j < rows.length; j++) {
-            if (rows[j]['PO Number'].toString().trim() === roPO && !poDetails[roPO]) {
-              var detail = {};
-              roHeaders.forEach(function(h, k) { detail[h] = roData[i][k]; });
-              poDetails[roPO] = detail;
-              break;
-            }
-          }
-        }
-      }
-
-      return _respond({ success: true, data: rows, poDetails: poDetails, query: query }, callback);
+      return _respond({ success: true, data: rows }, callback);
     }
 
-    // ---- MATERIAL INFO ----
-    if (action === 'materialinfo') {
-      var matSheet = ss.getSheetByName('Material Info');
-      if (!matSheet) return _respond({ success: false, error: 'Sheet "Material Info" not found' }, callback);
+    // ---- ADD PALLET ITEM ----
+    if (action === 'addpalletitem') {
+      var piSheet = ss.getSheetByName('Pallet Build Info');
+      if (!piSheet) return _respond({ success: false, error: 'Sheet "Pallet Build Info" not found' }, callback);
+      var palletId = (e.parameter.palletid || '').toString().trim();
+      var itemCode = (e.parameter.itemcode || '').toString().trim();
+      var itemDesc = (e.parameter.itemdesc || '').toString().trim();
+      var itemQty = (e.parameter.itemqty || '1').toString().trim();
+      var itemSerial = (e.parameter.itemserial || '').toString().trim();
+      if (!palletId) return _respond({ success: false, error: 'Pallet ID is required' }, callback);
+      if (!itemCode) return _respond({ success: false, error: 'Item Code is required' }, callback);
 
-      var po = (e.parameter.po || '').toString().trim();
-      var component = (e.parameter.component || '').toString().trim();
-      var serial = (e.parameter.serial || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-      if (!component) return _respond({ success: false, error: 'Component is required' }, callback);
+      // Generate next record number
+      var lastRow = piSheet.getLastRow();
+      var nextRecord = 1;
+      if (lastRow >= 2) {
+        var records = piSheet.getRange('A2:A' + lastRow).getValues().flat();
+        for (var i = 0; i < records.length; i++) {
+          var num = parseInt(records[i]);
+          if (num >= nextRecord) nextRecord = num + 1;
+        }
+      }
 
       var now = new Date();
       var ts = _ts(now);
-      matSheet.appendRow([po, component, serial, ts]);
-      return _respond({ success: true, po: po, component: component, serial: serial }, callback);
+      piSheet.appendRow([nextRecord, palletId, itemCode, itemDesc, itemQty, itemSerial, ts, user, '', '', 'On Pallet']);
+      return _respond({ success: true, record: nextRecord, palletId: palletId }, callback);
     }
 
-    // ---- UPDATE MATERIAL SERIAL ----
-    if (action === 'updatematerial') {
-      var matSheet = ss.getSheetByName('Material Info');
-      if (!matSheet) return _respond({ success: false, error: 'Sheet "Material Info" not found' }, callback);
-      var rowNum = parseInt(e.parameter.row || '0');
-      var newSerial = (e.parameter.serial || '').toString().trim();
-      if (!rowNum || rowNum < 2) return _respond({ success: false, error: 'Invalid row' }, callback);
-      if (rowNum > matSheet.getLastRow()) return _respond({ success: false, error: 'Row not found' }, callback);
-      matSheet.getRange(rowNum, 3).setValue(newSerial);
+    // ---- REMOVE PALLET ITEM ----
+    if (action === 'removepalletitem') {
+      var piSheet = ss.getSheetByName('Pallet Build Info');
+      if (!piSheet) return _respond({ success: false, error: 'Sheet "Pallet Build Info" not found' }, callback);
+      var row = parseInt(e.parameter.row);
+      if (isNaN(row)) return _respond({ success: false, error: 'Row required' }, callback);
+      var sheetRow = row + 2;
+      var now = new Date();
+      var ts = _ts(now);
+      piSheet.getRange(sheetRow, 9).setValue(ts); // Date Removed
+      piSheet.getRange(sheetRow, 10).setValue(user); // Removed By
+      piSheet.getRange(sheetRow, 11).setValue('Removed'); // Status
       return _respond({ success: true }, callback);
     }
 
-    // ---- DELETE MATERIAL ENTRY ----
-    if (action === 'deletematerial') {
-      var matSheet = ss.getSheetByName('Material Info');
-      if (!matSheet) return _respond({ success: false, error: 'Sheet "Material Info" not found' }, callback);
-      var rowNum = parseInt(e.parameter.row || '0');
-      if (!rowNum || rowNum < 2) return _respond({ success: false, error: 'Invalid row' }, callback);
-      if (rowNum > matSheet.getLastRow()) return _respond({ success: false, error: 'Row not found' }, callback);
-      matSheet.deleteRow(rowNum);
-      return _respond({ success: true }, callback);
-    }
-
-    // ---- MATERIAL INFO READ (get entries for a PO) ----
-    if (action === 'materialread') {
-      var matSheet = ss.getSheetByName('Material Info');
-      if (!matSheet) return _respond({ success: false, error: 'Sheet "Material Info" not found' }, callback);
-
-      var po = (e.parameter.po || '').toString().trim();
-      var data = matSheet.getDataRange().getValues();
-      if (data.length <= 1) return _respond({ success: true, data: [] }, callback);
-
-      var headers = data[0];
-      var rows = [];
-      for (var i = 1; i < data.length; i++) {
-        var row = {};
-        headers.forEach(function(h, j) { row[h] = data[i][j]; });
-        row['_row'] = i + 1; // sheet row number (1-indexed, +1 for header)
-        if (!po || row['PO Number'].toString().trim() === po) rows.push(row);
-      }
+    // ---- READ LINE HAULS ----
+    if (action === 'readlinehauls') {
+      var lhSheet = ss.getSheetByName('Line Hauls');
+      if (!lhSheet) return _respond({ success: true, data: [] }, callback);
+      var lastRow = lhSheet.getLastRow();
+      if (lastRow < 2) return _respond({ success: true, data: [] }, callback);
+      var data = lhSheet.getRange(2, 1, lastRow - 1, 18).getValues();
+      var headers = ['Line ID', 'Name', 'Starting Point', 'Occurrence', 'Stop 1', 'Stop 2', 'Stop 3', 'Stop 4', 'Stop 5', 'Stop 6', 'Stop 7', 'Stop 8', 'Stop 9', 'Stop 10', 'Created By', 'Created On', 'Last Edited', 'Edited By'];
+      var rows = data.map(function(row, idx) {
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = _cellToString(row[i]); });
+        obj['_row'] = idx;
+        return obj;
+      });
       return _respond({ success: true, data: rows }, callback);
     }
 
-    // ---- SHIP OUT ----
-    if (action === 'shipout') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-
-      var idx = _findPO(receivedSheet, po);
-      if (idx === -1) return _respond({ success: false, error: 'PO#' + po + ' not found' }, callback);
-
-      var row = idx + 2;
-      var status = receivedSheet.getRange(row, 4).getValue().toString().trim();
-      if (status !== 'QC Passed') {
-        return _respond({ success: false, error: 'PO#' + po + ' status is "' + status + '", expected "QC Passed"' }, callback);
-      }
-
-      var now = new Date();
-      var ts = _ts(now);
-      receivedSheet.getRange(row, 4).setValue('Tender');
-      receivedSheet.getRange(row, 10).setValue(ts); // Transfer Out Date = col J = index 10
-      historySheet.appendRow([po, ts, 'Ship Out APP', 'QC Passed', 'Tender', user]);
-      return _respond({ success: true, po: po, shipDate: ts }, callback);
-    }
-
-    // ---- SEND TO INFIRMARY ----
-    if (action === 'toinfirmary') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      var note = (e.parameter.note || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-      if (!note) return _respond({ success: false, error: 'A note is required' }, callback);
-
-      var idx = _findPO(receivedSheet, po);
-      if (idx === -1) return _respond({ success: false, error: 'PO#' + po + ' not found' }, callback);
-
-      var row = idx + 2;
-      var currentStatus = receivedSheet.getRange(row, 4).getValue().toString().trim();
-      if (currentStatus === 'Tender') {
-        return _respond({ success: false, error: 'PO#' + po + ' is already Tendered' }, callback);
-      }
-
-      var now = new Date();
-      var ts = _ts(now);
-      receivedSheet.getRange(row, 4).setValue('In Infirmary');
-      historySheet.appendRow([po, ts, 'Infirmary APP', currentStatus, 'In Infirmary', user]);
-
-      var infNotesSheet = ss.getSheetByName('Infirmary Notes');
-      if (infNotesSheet) {
-        infNotesSheet.appendRow([po, ts, note]);
-      }
-
-      return _respond({ success: true, po: po, fromStatus: currentStatus }, callback);
-    }
-
-    // ---- ADD INFIRMARY NOTE ----
-    if (action === 'addinfirmarynote') {
-      var po = (e.parameter.po || '').toString().trim();
-      var note = (e.parameter.note || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-      if (!note) return _respond({ success: false, error: 'A note is required' }, callback);
-
-      var infNotesSheet = ss.getSheetByName('Infirmary Notes');
-      if (!infNotesSheet) return _respond({ success: false, error: 'Sheet "Infirmary Notes" not found' }, callback);
-
-      var now = new Date();
-      var ts = _ts(now);
-      infNotesSheet.appendRow([po, ts, note]);
-      return _respond({ success: true, po: po }, callback);
-    }
-
-    // ---- READ INFIRMARY NOTES ----
-    if (action === 'readinfirmarynotes') {
-      var infNotesSheet = ss.getSheetByName('Infirmary Notes');
-      if (!infNotesSheet) return _respond({ success: false, error: 'Sheet "Infirmary Notes" not found' }, callback);
-
-      var po = (e.parameter.po || '').toString().trim();
-      var data = infNotesSheet.getDataRange().getValues();
-      if (data.length <= 1) return _respond({ success: true, data: [] }, callback);
-
-      var headers = data[0];
-      var rows = [];
-      for (var i = 1; i < data.length; i++) {
-        var row = {};
-        headers.forEach(function(h, j) { row[h] = data[i][j]; });
-        if (!po || row['PO Number'].toString().trim() === po) rows.push(row);
-      }
-      return _respond({ success: true, data: rows }, callback);
-    }
-
-    // ---- MOVE FROM INFIRMARY ----
-    if (action === 'movefrominf') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      var newStatus = (e.parameter.newstatus || '').toString().trim();
-      var note = (e.parameter.note || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-      if (!newStatus) return _respond({ success: false, error: 'New status is required' }, callback);
-
-      var idx = _findPO(receivedSheet, po);
-      if (idx === -1) return _respond({ success: false, error: 'PO#' + po + ' not found' }, callback);
-
-      var row = idx + 2;
-      var currentStatus = receivedSheet.getRange(row, 4).getValue().toString().trim();
-      if (currentStatus !== 'In Infirmary') {
-        return _respond({ success: false, error: 'PO#' + po + ' is not In Infirmary' }, callback);
-      }
-
-      var now = new Date();
-      var ts = _ts(now);
-      receivedSheet.getRange(row, 4).setValue(newStatus);
-      historySheet.appendRow([po, ts, 'Infirmary APP', 'In Infirmary', newStatus, user]);
-
-      if (note) {
-        var infNotesSheet = ss.getSheetByName('Infirmary Notes');
-        if (infNotesSheet) {
-          infNotesSheet.appendRow([po, ts, 'Moved to ' + newStatus + ': ' + note]);
-        }
-      }
-
-      return _respond({ success: true, po: po, newStatus: newStatus }, callback);
-    }
-
-    // ---- PO HISTORY (read transaction history for a PO) ----
-    if (action === 'pohistory') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var po = (e.parameter.po || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-
-      var data = historySheet.getDataRange().getValues();
-      if (data.length <= 1) return _respond({ success: true, data: [] }, callback);
-
-      var headers = data[0];
-      var rows = [];
-      for (var i = 1; i < data.length; i++) {
-        if (data[i][0].toString().trim() === po) {
-          var row = {};
-          headers.forEach(function(h, j) { row[h] = data[i][j]; });
-          rows.push(row);
-        }
-      }
-      return _respond({ success: true, data: rows }, callback);
-    }
-
-    // ---- ALL TRANSACTION HISTORY ----
-    if (action === 'alltransactions') {
-      if (!historySheet) return _respond({ success: false, error: 'Sheet "Transaction History" not found' }, callback);
-      var data = historySheet.getDataRange().getValues();
-      if (data.length <= 1) return _respond({ success: true, data: [] }, callback);
-      var headers = data[0];
-      var rows = [];
-      for (var i = 1; i < data.length; i++) {
-        var row = {};
-        headers.forEach(function(h, j) { row[h] = data[i][j]; });
-        rows.push(row);
-      }
-      return _respond({ success: true, data: rows }, callback);
-    }
-
-    // ---- READ CONFIGS ----
-    if (action === 'readconfigs') {
-      var cfgSheet = ss.getSheetByName('Cabinet Configs');
-      if (!cfgSheet) return _respond({ success: false, error: 'Sheet "Cabinet Configs" not found' }, callback);
-      var data = cfgSheet.getDataRange().getValues();
-      if (data.length <= 1) return _respond({ success: true, data: [] }, callback);
-      var headers = data[0];
-      var rows = [];
-      for (var i = 1; i < data.length; i++) {
-        var row = {};
-        headers.forEach(function(h, j) { row[h] = data[i][j]; });
-        rows.push(row);
-      }
-      return _respond({ success: true, data: rows }, callback);
-    }
-
-    // ---- ADD CONFIG ----
-    if (action === 'addconfig') {
-      var cfgSheet = ss.getSheetByName('Cabinet Configs');
-      if (!cfgSheet) return _respond({ success: false, error: 'Sheet "Cabinet Configs" not found' }, callback);
+    // ---- ADD LINE HAUL ----
+    if (action === 'addlinehaul') {
+      var lhSheet = ss.getSheetByName('Line Hauls');
+      if (!lhSheet) return _respond({ success: false, error: 'Sheet "Line Hauls" not found' }, callback);
+      var lineId = (e.parameter.lineid || '').toString().trim();
       var name = (e.parameter.name || '').toString().trim();
-      if (!name) return _respond({ success: false, error: 'Configuration name is required' }, callback);
+      var startingPoint = (e.parameter.startingpoint || '').toString().trim();
+      var occurrence = (e.parameter.occurrence || '').toString().trim();
+      var stopsJson = (e.parameter.stops || '[]').toString();
+      if (!lineId) return _respond({ success: false, error: 'Line ID is required' }, callback);
+      if (!name) return _respond({ success: false, error: 'Name is required' }, callback);
+      if (!startingPoint) return _respond({ success: false, error: 'Starting Point is required' }, callback);
 
       // Duplicate check
-      var lastRow = cfgSheet.getLastRow();
-      if (lastRow > 1) {
-        var names = cfgSheet.getRange('A2:A' + lastRow).getValues().flat();
-        if (names.some(function(v) { return v.toString().trim().toLowerCase() === name.toLowerCase(); })) {
-          return _respond({ success: false, error: 'Configuration "' + name + '" already exists' }, callback);
-        }
-      }
-
-      var rowData = [name];
-      for (var i = 1; i <= 15; i++) {
-        rowData.push((e.parameter['mat' + i] || '').toString().trim());
-      }
-      cfgSheet.appendRow(rowData);
-      return _respond({ success: true, name: name }, callback);
-    }
-
-    // ---- UPDATE CONFIG ----
-    if (action === 'updateconfig') {
-      var cfgSheet = ss.getSheetByName('Cabinet Configs');
-      if (!cfgSheet) return _respond({ success: false, error: 'Sheet "Cabinet Configs" not found' }, callback);
-      var origName = (e.parameter.origname || '').toString().trim();
-      var name = (e.parameter.name || '').toString().trim();
-      if (!origName || !name) return _respond({ success: false, error: 'Configuration name is required' }, callback);
-
-      var lastRow = cfgSheet.getLastRow();
-      if (lastRow < 2) return _respond({ success: false, error: 'Configuration not found' }, callback);
-      var names = cfgSheet.getRange('A2:A' + lastRow).getValues().flat();
-      var rowIdx = -1;
-      for (var i = 0; i < names.length; i++) {
-        if (names[i].toString().trim().toLowerCase() === origName.toLowerCase()) { rowIdx = i; break; }
-      }
-      if (rowIdx === -1) return _respond({ success: false, error: 'Configuration "' + origName + '" not found' }, callback);
-
-      var sheetRow = rowIdx + 2;
-      cfgSheet.getRange(sheetRow, 1).setValue(name);
-      for (var i = 1; i <= 15; i++) {
-        cfgSheet.getRange(sheetRow, i + 1).setValue((e.parameter['mat' + i] || '').toString().trim());
-      }
-      return _respond({ success: true, name: name }, callback);
-    }
-
-    // ---- DELETE CONFIG ----
-    if (action === 'deleteconfig') {
-      var cfgSheet = ss.getSheetByName('Cabinet Configs');
-      if (!cfgSheet) return _respond({ success: false, error: 'Sheet "Cabinet Configs" not found' }, callback);
-      var name = (e.parameter.name || '').toString().trim();
-      if (!name) return _respond({ success: false, error: 'Configuration name is required' }, callback);
-
-      var lastRow = cfgSheet.getLastRow();
-      if (lastRow < 2) return _respond({ success: false, error: 'Configuration not found' }, callback);
-      var names = cfgSheet.getRange('A2:A' + lastRow).getValues().flat();
-      var rowIdx = -1;
-      for (var i = 0; i < names.length; i++) {
-        if (names[i].toString().trim().toLowerCase() === name.toLowerCase()) { rowIdx = i; break; }
-      }
-      if (rowIdx === -1) return _respond({ success: false, error: 'Configuration "' + name + '" not found' }, callback);
-
-      cfgSheet.deleteRow(rowIdx + 2);
-      return _respond({ success: true, name: name }, callback);
-    }
-
-    // ---- PHOTO TEST (verify Drive access) ----
-    if (action === 'phototest') {
-      var parentFolder = PHOTO_FOLDER_ID ? DriveApp.getFolderById(PHOTO_FOLDER_ID) : DriveApp.getRootFolder();
-      return _respond({ success: true, folderName: parentFolder.getName(), folderId: PHOTO_FOLDER_ID }, callback);
-    }
-
-    // ---- PHOTO CHUNK (receive a piece of base64 image via JSONP) ----
-    if (action === 'photochunk') {
-      var uploadId = (e.parameter.uploadId || '').toString();
-      var chunkIndex = parseInt(e.parameter.chunkIndex || '0');
-      var totalChunks = parseInt(e.parameter.totalChunks || '0');
-      var chunk = (e.parameter.chunk || '').toString();
-      // Decode if it was double-encoded
-      try { chunk = decodeURIComponent(chunk); } catch(ex) {}
-      if (!uploadId) return _respond({ success: false, error: 'Missing uploadId' }, callback);
-
-      var cache = CacheService.getScriptCache();
-      cache.put(uploadId + '_' + chunkIndex, chunk, 300);
-      cache.put(uploadId + '_total', totalChunks.toString(), 300);
-      return _respond({ success: true, chunk: chunkIndex, of: totalChunks }, callback);
-    }
-
-    // ---- PHOTO ASSEMBLE (combine chunks and save to Drive) ----
-    if (action === 'photoassemble') {
-      var uploadId = (e.parameter.uploadId || '').toString();
-      var po = (e.parameter.po || '').toString().trim();
-      var label = (e.parameter.label || 'photo').toString().trim();
-      var totalChunks = parseInt(e.parameter.totalChunks || '0');
-      if (!uploadId || !po || !totalChunks) return _respond({ success: false, error: 'Missing parameters' }, callback);
-
-      var cache = CacheService.getScriptCache();
-      var imageData = '';
-      for (var i = 0; i < totalChunks; i++) {
-        var chunk = cache.get(uploadId + '_' + i);
-        if (!chunk) return _respond({ success: false, error: 'Chunk ' + i + ' expired or missing. Try again.' }, callback);
-        imageData += chunk;
-      }
-
-      var parentFolder = PHOTO_FOLDER_ID ? DriveApp.getFolderById(PHOTO_FOLDER_ID) : DriveApp.getRootFolder();
-      var poFolders = parentFolder.getFoldersByName(po);
-      var poFolder = poFolders.hasNext() ? poFolders.next() : parentFolder.createFolder(po);
-
-      var parts = imageData.split(',');
-      var mimeMatch = parts[0].match(/data:(.*?);/);
-      var mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-      var ext = mime === 'image/png' ? '.png' : '.jpg';
-      var fileName = po + ' - ' + label + ext;
-      var blob = Utilities.newBlob(Utilities.base64Decode(parts[1]), mime, fileName);
-
-      var file = poFolder.createFile(blob);
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-
-      for (var i = 0; i < totalChunks; i++) { cache.remove(uploadId + '_' + i); }
-      cache.remove(uploadId + '_total');
-
-      return _respond({ success: true, fileId: file.getId(), fileUrl: file.getUrl(), fileName: fileName, folderUrl: poFolder.getUrl() }, callback);
-    }
-
-    // ---- LIST PHOTOS (JSONP) ----
-    if (action === 'listphotos') {
-      var po = (e.parameter.po || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' }, callback);
-
-      var parentFolder = PHOTO_FOLDER_ID ? DriveApp.getFolderById(PHOTO_FOLDER_ID) : DriveApp.getRootFolder();
-      var poFolders = parentFolder.getFoldersByName(po);
-      if (!poFolders.hasNext()) return _respond({ success: true, photos: [] }, callback);
-
-      var poFolder = poFolders.next();
-      var files = poFolder.getFiles();
-      var photos = [];
-      while (files.hasNext()) {
-        var f = files.next();
-        photos.push({
-          name: f.getName(),
-          url: 'https://drive.google.com/thumbnail?id=' + f.getId() + '&sz=w400',
-          fullUrl: f.getUrl(),
-          date: Utilities.formatDate(f.getDateCreated(), Session.getScriptTimeZone(), TS_FORMAT)
-        });
-      }
-      return _respond({ success: true, photos: photos, folderUrl: poFolder.getUrl() }, callback);
-    }
-
-    // ---- SEND BACKUP EMAIL ON DEMAND ----
-    if (action === 'sendbackup') {
-      weeklyBackupEmail();
-      return _respond({ success: true, message: 'Backup email sent to ebrady@ctdi.com' }, callback);
-    }
-
-    // ---- READ PHOTO CONFIGS ----
-    if (action === 'readphotoconfigs') {
-      var pcSheet = ss.getSheetByName('Photo Configs');
-      if (!pcSheet) return _respond({ success: false, error: 'Sheet "Photo Configs" not found' }, callback);
-      var data = pcSheet.getDataRange().getValues();
-      if (data.length <= 1) return _respond({ success: true, data: {} }, callback);
-      var configs = {};
-      for (var i = 1; i < data.length; i++) {
-        var cfg = (data[i][0] || '').toString().trim();
-        var status = (data[i][1] || '').toString().trim();
-        var photo = (data[i][2] || '').toString().trim();
-        var photoNum = (data[i][3] || '').toString().trim();
-        if (cfg && photo && photo !== '-') {
-          if (!configs[cfg]) configs[cfg] = [];
-          configs[cfg].push({ name: photo, status: status, num: photoNum });
-        }
-      }
-      return _respond({ success: true, data: configs }, callback);
-    }
-
-    // ---- ADD PHOTO CONFIG ROW ----
-    if (action === 'addphotoconfig') {
-      var pcSheet = ss.getSheetByName('Photo Configs');
-      if (!pcSheet) return _respond({ success: false, error: 'Sheet "Photo Configs" not found' }, callback);
-      var cfg = (e.parameter.config || '').toString().trim();
-      var status = (e.parameter.status || '').toString().trim();
-      var photo = (e.parameter.photo || '').toString().trim();
-      var photoNum = (e.parameter.photonum || '').toString().trim();
-      if (!cfg || !photo) return _respond({ success: false, error: 'Configuration and Photo Name are required' }, callback);
-      pcSheet.appendRow([cfg, status, photo, photoNum]);
-      return _respond({ success: true }, callback);
-    }
-
-    // ---- UPDATE PHOTO CONFIG ROW ----
-    if (action === 'updatephotoconfig') {
-      var pcSheet = ss.getSheetByName('Photo Configs');
-      if (!pcSheet) return _respond({ success: false, error: 'Sheet "Photo Configs" not found' }, callback);
-      var rowNum = parseInt(e.parameter.row || '0');
-      var status = (e.parameter.status || '').toString().trim();
-      var photo = (e.parameter.photo || '').toString().trim();
-      var photoNum = (e.parameter.photonum || '').toString().trim();
-      if (!rowNum || rowNum < 2) return _respond({ success: false, error: 'Invalid row' }, callback);
-      if (!photo) return _respond({ success: false, error: 'Photo Name is required' }, callback);
-
-      // Get the configuration for this row
-      var thisConfig = pcSheet.getRange(rowNum, 1).getValue().toString().trim();
-
-      // If photo number is being set, check for conflicts and shift
-      if (photoNum && thisConfig) {
-        var newNum = parseInt(photoNum);
-        if (!isNaN(newNum)) {
-          var allData = pcSheet.getDataRange().getValues();
-          // Find all rows in same config with number >= newNum (excluding current row)
-          var rowsToShift = [];
-          for (var i = 1; i < allData.length; i++) {
-            var sheetRow = i + 1;
-            if (sheetRow === rowNum) continue; // skip the row being edited
-            var cfg = (allData[i][0] || '').toString().trim();
-            var existingNum = parseInt((allData[i][3] || '').toString().trim());
-            if (cfg === thisConfig && !isNaN(existingNum) && existingNum >= newNum) {
-              rowsToShift.push({ sheetRow: sheetRow, currentNum: existingNum });
-            }
-          }
-          // Sort descending so we update from highest to lowest (avoid conflicts during update)
-          rowsToShift.sort(function(a, b) { return b.currentNum - a.currentNum; });
-          for (var j = 0; j < rowsToShift.length; j++) {
-            pcSheet.getRange(rowsToShift[j].sheetRow, 4).setValue(rowsToShift[j].currentNum + 1);
+      var lastRow = lhSheet.getLastRow();
+      if (lastRow >= 2) {
+        var ids = lhSheet.getRange('A2:A' + lastRow).getValues().flat();
+        for (var i = 0; i < ids.length; i++) {
+          if (ids[i].toString().trim().toUpperCase() === lineId.toUpperCase()) {
+            return _respond({ success: false, error: 'Line ID "' + lineId + '" already exists' }, callback);
           }
         }
       }
 
-      pcSheet.getRange(rowNum, 2).setValue(status);
-      pcSheet.getRange(rowNum, 3).setValue(photo);
-      pcSheet.getRange(rowNum, 4).setValue(photoNum);
+      var stops = JSON.parse(stopsJson);
+      var now = new Date();
+      var ts = _ts(now);
+      var rowData = [lineId, name, startingPoint, occurrence];
+      for (var i = 0; i < 10; i++) {
+        rowData.push(stops[i] || '');
+      }
+      rowData.push(user, ts, '', '');
+      lhSheet.appendRow(rowData);
+      return _respond({ success: true, lineId: lineId }, callback);
+    }
+
+    // ---- UPDATE LINE HAUL ----
+    if (action === 'updatelinehaul') {
+      var lhSheet = ss.getSheetByName('Line Hauls');
+      if (!lhSheet) return _respond({ success: false, error: 'Sheet "Line Hauls" not found' }, callback);
+      var row = parseInt(e.parameter.row);
+      if (isNaN(row)) return _respond({ success: false, error: 'Row required' }, callback);
+      var sheetRow = row + 2;
+      var name = (e.parameter.name || '').toString().trim();
+      var startingPoint = (e.parameter.startingpoint || '').toString().trim();
+      var occurrence = (e.parameter.occurrence || '').toString().trim();
+      var stopsJson = (e.parameter.stops || '[]').toString();
+      if (!name) return _respond({ success: false, error: 'Name is required' }, callback);
+      if (!startingPoint) return _respond({ success: false, error: 'Starting Point is required' }, callback);
+
+      var stops = JSON.parse(stopsJson);
+      var now = new Date();
+      var ts = _ts(now);
+      lhSheet.getRange(sheetRow, 2).setValue(name);
+      lhSheet.getRange(sheetRow, 3).setValue(startingPoint);
+      lhSheet.getRange(sheetRow, 4).setValue(occurrence);
+      for (var i = 0; i < 10; i++) {
+        lhSheet.getRange(sheetRow, 5 + i).setValue(stops[i] || '');
+      }
+      lhSheet.getRange(sheetRow, 17).setValue(ts);
+      lhSheet.getRange(sheetRow, 18).setValue(user);
       return _respond({ success: true }, callback);
     }
 
-    // ---- DELETE PHOTO CONFIG ROW ----
-    if (action === 'deletephotoconfig') {
-      var pcSheet = ss.getSheetByName('Photo Configs');
-      if (!pcSheet) return _respond({ success: false, error: 'Sheet "Photo Configs" not found' }, callback);
-      var rowNum = parseInt(e.parameter.row || '0');
-      if (!rowNum || rowNum < 2) return _respond({ success: false, error: 'Invalid row' }, callback);
-      pcSheet.deleteRow(rowNum);
+    // ---- DELETE LINE HAUL ----
+    if (action === 'deletelinehaul') {
+      var lhSheet = ss.getSheetByName('Line Hauls');
+      if (!lhSheet) return _respond({ success: false, error: 'Sheet "Line Hauls" not found' }, callback);
+      var row = parseInt(e.parameter.row);
+      if (isNaN(row)) return _respond({ success: false, error: 'Row required' }, callback);
+      var sheetRow = row + 2;
+      lhSheet.deleteRow(sheetRow);
       return _respond({ success: true }, callback);
     }
 
-    // ---- AUTO FIX PHOTO NUMBERING ----
-    if (action === 'autofixphotonums') {
-      var pcSheet = ss.getSheetByName('Photo Configs');
-      if (!pcSheet) return _respond({ success: false, error: 'Sheet "Photo Configs" not found' }, callback);
-      var configName = (e.parameter.config || '').toString().trim();
-      if (!configName) return _respond({ success: false, error: 'Configuration is required' }, callback);
-
-      var data = pcSheet.getDataRange().getValues();
-      // Collect rows for this config with their current numbers
-      var configRows = [];
-      for (var i = 1; i < data.length; i++) {
-        var cfg = (data[i][0] || '').toString().trim();
-        if (cfg === configName) {
-          var num = parseInt((data[i][3] || '').toString().trim());
-          configRows.push({ sheetRow: i + 1, currentNum: isNaN(num) ? 99999 : num });
-        }
-      }
-      // Sort by current number (maintain order)
-      configRows.sort(function(a, b) { return a.currentNum - b.currentNum; });
-      // Reassign sequential numbers starting from 1
-      for (var j = 0; j < configRows.length; j++) {
-        pcSheet.getRange(configRows[j].sheetRow, 4).setValue(j + 1);
-      }
-      return _respond({ success: true, count: configRows.length }, callback);
-    }
-
-    // ---- READ PHOTO CONFIGS RAW (with row numbers) ----
-    if (action === 'readphotoconfigsraw') {
-      var pcSheet = ss.getSheetByName('Photo Configs');
-      if (!pcSheet) return _respond({ success: false, error: 'Sheet "Photo Configs" not found' }, callback);
-      var data = pcSheet.getDataRange().getValues();
-      if (data.length <= 1) return _respond({ success: true, data: [] }, callback);
-      var rows = [];
-      for (var i = 1; i < data.length; i++) {
-        rows.push({
-          _row: i + 1,
-          config: (data[i][0] || '').toString().trim(),
-          status: (data[i][1] || '').toString().trim(),
-          photo: (data[i][2] || '').toString().trim(),
-          num: (data[i][3] || '').toString().trim()
-        });
-      }
-      return _respond({ success: true, data: rows }, callback);
-    }
-
-    // ---- Default: READ all orders ----
-    var data = receivedSheet.getDataRange().getValues();
-    if (data.length <= 1) return _respond({ success: true, data: [] }, callback);
-
-    var headers = data[0];
-    var rows = [];
-    for (var i = 1; i < data.length; i++) {
-      var row = {};
-      headers.forEach(function(h, j) { row[h] = data[i][j]; });
-      rows.push(row);
-    }
-    return _respond({ success: true, data: rows }, callback);
+    // ---- DEFAULT: return all pallets ----
+    return _respond({ success: true, data: [] }, callback);
 
   } catch (err) {
     return _respond({ success: false, error: err.toString() }, callback);
   }
 }
 
-function doPost(e) {
-  try {
-    var data;
-    // Handle form POST (from iframe) or JSON POST
-    if (e.parameter && e.parameter.postData) {
-      data = JSON.parse(e.parameter.postData);
-    } else {
-      data = JSON.parse(e.postData.contents);
-    }
 
-    // ---- PHOTO UPLOAD (POST only) ----
-    if (data.action === 'uploadphoto') {
-      var po = (data.po || '').toString().trim();
-      var imageData = (data.image || '').toString();
-      var label = (data.label || '').toString().trim() || 'photo';
-      if (!po) return _respond({ success: false, error: 'PO Number is required' });
-      if (!imageData) return _respond({ success: false, error: 'No image data' });
-
-      // Get or create PO subfolder
-      var parentFolder;
-      if (PHOTO_FOLDER_ID) {
-        parentFolder = DriveApp.getFolderById(PHOTO_FOLDER_ID);
-      } else {
-        parentFolder = DriveApp.getRootFolder();
-      }
-
-      var poFolders = parentFolder.getFoldersByName(po);
-      var poFolder = poFolders.hasNext() ? poFolders.next() : parentFolder.createFolder(po);
-
-      // Decode base64 image
-      var parts = imageData.split(',');
-      var mimeMatch = parts[0].match(/data:(.*?);/);
-      var mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-      var ext = mime === 'image/png' ? '.png' : '.jpg';
-      var blob = Utilities.newBlob(Utilities.base64Decode(parts[1]), mime, po + '_' + label + '_' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmmss') + ext);
-
-      var file = poFolder.createFile(blob);
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-
-      return _respond({ success: true, fileId: file.getId(), fileUrl: file.getUrl(), fileName: file.getName() });
-    }
-
-    // ---- LIST PHOTOS (POST for consistency) ----
-    if (data.action === 'listphotos') {
-      var po = (data.po || '').toString().trim();
-      if (!po) return _respond({ success: false, error: 'PO Number is required' });
-
-      var parentFolder;
-      if (PHOTO_FOLDER_ID) {
-        parentFolder = DriveApp.getFolderById(PHOTO_FOLDER_ID);
-      } else {
-        parentFolder = DriveApp.getRootFolder();
-      }
-
-      var poFolders = parentFolder.getFoldersByName(po);
-      if (!poFolders.hasNext()) return _respond({ success: true, photos: [] });
-
-      var poFolder = poFolders.next();
-      var files = poFolder.getFiles();
-      var photos = [];
-      while (files.hasNext()) {
-        var f = files.next();
-        photos.push({
-          name: f.getName(),
-          url: 'https://drive.google.com/thumbnail?id=' + f.getId() + '&sz=w400',
-          fullUrl: f.getUrl(),
-          date: Utilities.formatDate(f.getDateCreated(), Session.getScriptTimeZone(), TS_FORMAT)
-        });
-      }
-      return _respond({ success: true, photos: photos });
-    }
-
-    // Fallback to GET handler for other POST actions
-    var fakeE = { parameter: data };
-    if (!data.action) fakeE.parameter.action = 'receive';
-    return doGet(fakeE);
-  } catch (err) {
-    return _respond({ success: false, error: err.toString() });
-  }
-}
-
-
-// ============================================================
-// WEEKLY BACKUP — Emails Excel copy of spreadsheet every Friday 4:00 PM EST
-// ============================================================
-// SETUP:
-// 1. Add this to your Apps Script
-// 2. Run setupWeeklyBackupTrigger() ONCE manually to create the trigger
-// 3. It will ask for email/Drive permissions — approve them
-// 4. After that, it runs automatically every Tuesday at 8:30 AM EST
-// ============================================================
-
-function weeklyBackupEmail() {
-  var recipients = 'ebrady@ctdi.com';
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var name = ss.getName();
-  var date = Utilities.formatDate(new Date(), 'America/New_York', 'M/d/yyyy h:mm a');
-
-  // Export as Excel (.xlsx)
-  var url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=xlsx';
-  var token = ScriptApp.getOAuthToken();
-  var response = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
-  var blob = response.getBlob().setName(name + ' - Backup ' + Utilities.formatDate(new Date(), 'America/New_York', 'yyyy-MM-dd') + '.xlsx');
-
-  GmailApp.sendEmail(recipients,
-    'AWAT Production Tracker — Weekly Backup (' + date + ')',
-    'Attached is the weekly backup of the AWAT Production Tracker spreadsheet.\n\n'
-      + 'Generated: ' + date + ' EST\n'
-      + 'Sheet: ' + ss.getUrl() + '\n\n'
-      + 'This is an automated email sent every Friday at 4:00 PM EST.',
-    { attachments: [blob] }
-  );
-}
-
-// Run this function ONCE to set up the Friday 4:00 PM EST trigger
-function setupWeeklyBackupTrigger() {
-  // Remove any existing triggers for this function first
-  var triggers = ScriptApp.getProjectTriggers();
-  for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'weeklyBackupEmail') {
-      ScriptApp.deleteTrigger(triggers[i]);
-    }
-  }
-
-  // Create new weekly trigger: Friday at 4:00 PM EST
-  ScriptApp.newTrigger('weeklyBackupEmail')
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.FRIDAY)
-    .atHour(16)
-    .nearMinute(0)
-    .inTimezone('America/New_York')
-    .create();
-}
